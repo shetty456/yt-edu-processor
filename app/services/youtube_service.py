@@ -47,7 +47,7 @@ _EDU_KEYWORDS = frozenset({
     "workshop", "training", "bootcamp", "masterclass", "crash course",
     "mit", "stanford", "harvard", "coursera", "khan academy", "edx",
     "university", "college", "professor", "dr.", "phd",
-    "chapter", "module", "documentary", "analysis", "breakdown",
+    "chapter", "module", "documentary", "analysis", "breakdown", "sadhguru",
 })
 
 
