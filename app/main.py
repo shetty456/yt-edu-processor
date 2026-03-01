@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.schemas import ProcessRequest, ProcessResponse
-from app.services.pipeline import build_pipeline
+from app.services.pipeline import run_pipeline
 from app.utils import get_semaphore, logger
 
 settings = get_settings()
@@ -83,49 +83,26 @@ async def process_video(body: ProcessRequest) -> JSONResponse:
     async with sem:
         log.info("processing_started")
 
-        workflow = build_pipeline()
-
         try:
-            run_output = await asyncio.wait_for(
-                workflow.arun(input=body.youtube_url),
+            payload = await asyncio.wait_for(
+                run_pipeline(body.youtube_url),
                 timeout=settings.request_timeout_seconds,
             )
-
         except asyncio.TimeoutError:
             raise HTTPException(
                 status_code=504,
                 detail="Processing timed out. Try a shorter video.",
             )
-
         except ValueError as exc:
             raise HTTPException(
                 status_code=422,
                 detail=str(exc),
             )
-
         except Exception as exc:
             log.error("unexpected_error", error=str(exc))
             raise HTTPException(
                 status_code=500,
                 detail="Internal error. Please try again.",
-            )
-
-        # -----------------------------
-        # Extract Final Output (NEW Agno Compatible)
-        # -----------------------------
-        if not run_output or not isinstance(run_output.content, dict):
-            raise HTTPException(
-                status_code=500,
-                detail="Workflow returned empty output.",
-            )
-
-        payload: dict[str, Any] = run_output.content
-
-        # If _assemble raised but Agno swallowed it, the content will carry _failed
-        if payload.get("_failed"):
-            raise HTTPException(
-                status_code=422,
-                detail=payload.get("_error", "Video processing failed."),
             )
 
         log.info(

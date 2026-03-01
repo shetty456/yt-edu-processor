@@ -40,33 +40,59 @@ _QUIZ_SYS = """\
 You are an expert quiz writer for an online learning platform.
 
 Your questions will be shown to learners WITHOUT any reference material —
-they must stand alone as knowledge tests.
+they must stand alone as knowledge tests about the subject domain.
 
 ABSOLUTE RULES:
 1. NEVER reference "the video", "the transcript", "the speaker", "the article",
-   "the notes", or any source material. Write as if the question exists in a textbook.
-2. Questions must be answerable by someone who understands the subject —
-   not someone who watched a specific video.
-3. Every question tests either (a) conceptual understanding or (b) practical application.
-4. Only ONE option should be clearly correct.
-5. The "description" must explain WHY the answer is correct AND why the others are wrong,
-   in plain language.
-6. Output ONLY the raw JSON — no markdown fences, no text outside the object.
+   "the notes", "the story", "the parable", "the text", or any source material.
+2. NEVER ask what a specific character said, what a parable symbolizes, or what
+   lesson a particular narrative conveys. Extract the underlying concept and test THAT.
+3. Questions must be answerable by a subject-matter expert who has NEVER heard
+   this particular story or watched this video — they should be answerable from
+   general knowledge of the domain.
+4. Every question tests either (a) conceptual understanding of a domain idea or
+   (b) practical application of a domain principle in a scenario.
+5. FORBIDDEN question stems:
+   - "What does [X] symbolize in..."
+   - "What is the lesson of..."
+   - "What does the story/parable/teaching convey..."
+   - "What broader principle does [X] illustrate..."
+   - "According to [character]..."
+   - "What did [character] teach about..."
+6. Distractors must be DEFINITIVELY WRONG — each should represent a specific,
+   named misconception. Never write a distractor that is merely "a bit off" or
+   "partially correct." A learner who truly understands should instantly rule it out.
+7. Only ONE option should be clearly correct.
+8. The "description" must explain WHY the answer is correct AND why each wrong option
+   is wrong, in plain language.
+9. Output ONLY the raw JSON — no markdown fences, no text outside the object.
 """
 
 _QUIZ_USR = """\
-Generate between 10 and 15 MCQs that test deep understanding of the subject below.
-Write questions as if for a textbook chapter on this topic — standalone, not tied to any specific source.
+Use the transcript below as source material to identify the subject domain and its
+core concepts. Then write 10-15 MCQs that test understanding of THAT DOMAIN — not
+comprehension of this particular transcript.
+
+Approach:
+1. Read the transcript and extract the underlying domain (e.g., "karma and spiritual
+   effort in yogic philosophy", "machine learning fundamentals", "fiscal policy").
+2. Identify 10-15 specific concepts, principles, or applied scenarios from that domain.
+3. For each concept, write a question a textbook on this subject might ask — one that
+   is answerable without this specific transcript.
 
 Mix of question types:
-- Concept questions (6-8): test definitions, explanations, relationships between ideas
-- Application questions (4-7): test ability to use or reason with the concepts in a scenario
+- Concept questions (6-8): test definitions, cause-effect relationships, distinctions
+  between related ideas — framed in domain terms, not story terms.
+- Application questions (4-7): present a novel scenario and ask which principle applies
+  or what outcome follows — no references to characters or events from the transcript.
 
-IMPORTANT: Frame every question as universal knowledge —
-"What is X?", "Which best describes Y?", "In situation Z, what would you do?"
-Do NOT ask "According to..." or "What did the author say about..."
+Distractor quality requirement:
+- Each wrong option must be CLEARLY wrong and represent a specific, common misconception
+  about the domain. Label the misconception mentally as you write it.
+- Avoid writing "partially true" or "adjacent" options that a thoughtful person could
+  argue for.
 
-Source transcript (study this and write questions that test understanding of the subject):
+Source transcript (extract domain knowledge from this; do NOT quote it in questions):
 {content}
 
 Output ONLY this JSON:
@@ -76,7 +102,7 @@ Output ONLY this JSON:
       "question": "...",
       "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
       "answer": "A",
-      "description": "A is correct because... B is wrong because..."
+      "description": "A is correct because... B is wrong because... C is wrong because... D is wrong because..."
     }}
   ]
 }}
