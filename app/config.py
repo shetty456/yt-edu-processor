@@ -4,17 +4,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
     # Sarvam-m
     sarvam_api_key: str
     sarvam_base_url: str = "https://api.sarvam.ai/v1"
     sarvam_model: str = "sarvam-m"
-
-    # OpenAI (eval pass only)
-    openai_api_key: str
-    openai_base_url: str = "https://openrouter.ai/api/v1"
-    openai_eval_model: str = "meta-llama/llama-3.3-70b-instruct:free"
 
     # App behaviour
     max_concurrent_jobs: int = 5

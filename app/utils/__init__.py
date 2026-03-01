@@ -51,18 +51,3 @@ def get_sarvam_client() -> AsyncOpenAI:
     )
 
 
-def get_openrouter_client() -> AsyncOpenAI:
-    """
-    OpenRouter via OpenAI-compatible SDK.
-    Used only for the eval pass — free model, no billing.
-    Base URL is always https://openrouter.ai/api/v1
-    """
-    return AsyncOpenAI(
-        api_key=settings.openai_api_key,
-        base_url="https://openrouter.ai/api/v1",
-        default_headers={
-            # OpenRouter strongly recommends these headers for routing
-            "HTTP-Referer": "https://github.com/yt-edu-processor",
-            "X-Title": "YT Educational Processor",
-        },
-    )

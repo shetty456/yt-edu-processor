@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import logging
@@ -10,6 +11,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_l
 from app.config import get_settings
 from app.schemas import ChunkSummary, MergedSummary
 from app.utils import get_sarvam_client, logger
+
 
 settings = get_settings()
 _client = get_sarvam_client()
@@ -29,7 +31,18 @@ def _retry(n: int = 3):
 def _strip(text: str) -> str:
     text = re.sub(r"^```(?:json)?\s*\n?", "", text.strip())
     text = re.sub(r"\n?```\s*$", "", text).strip()
-    return text
+    brace = text.find("{")
+    bracket = text.find("[")
+    if brace >= 0 and (bracket < 0 or brace <= bracket):
+        text = text[brace:]
+    elif bracket >= 0:
+        text = text[bracket:]
+    rbrace = text.rfind("}")
+    rbracket = text.rfind("]")
+    end = max(rbrace, rbracket)
+    if end >= 0 and end < len(text) - 1:
+        text = text[:end + 1]
+    return text.strip()
 
 
 # ── 1. Chunking ───────────────────────────────────────────────────────────────
@@ -96,6 +109,8 @@ async def summarise_chunk(chunk: str, idx: int) -> ChunkSummary:
     resp = await _client.chat.completions.create(
         model=settings.sarvam_model,
         temperature=0.4,
+        max_tokens=2048,
+        response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": _CHUNK_SYS},
             {"role": "user", "content": _CHUNK_USR.format(chunk=chunk, words=len(chunk.split()))},
@@ -128,15 +143,46 @@ def merge_summaries(summaries: List[ChunkSummary]) -> MergedSummary:
 
 # ── 4. Notes generation ──────────────────────────────────────────────────────
 
-_REQUIRED_SECTIONS = [
-    "🎯 Big Picture Overview",
-    "🧠 Core Concepts Explained",
-    "⚡ Key Points (Quick Revision)",
-    "📖 Stories / Anecdotes / Examples",
-    "🛠️ Practical Applications",
-    "⚠️ Common Mistakes",
-    "🏁 Final Takeaways",
-]
+_NOTES_SYS = """\
+You are a thoughtful writer and educator. Your job is to turn a structured concept summary
+into a clear, engaging blog-style article that a curious reader can enjoy and learn from.
+
+RULES:
+1. Write in second person, active voice, present tense.
+2. Use flowing prose within sections — not just bullet dumps.
+3. Be specific and concrete. If a concept needs an example to land, include one.
+4. Do NOT reference "the video", "the speaker", "the transcript", or "the notes".
+5. Write as if you are explaining these ideas directly to the reader.
+"""
+
+_NOTES_USR = """\
+Write a blog-style article titled "{title}".
+
+Source material (structured concept extraction):
+{summary}
+
+Use EXACTLY these four H2 headings — write naturally under each:
+
+## Overview
+(What is this topic about and why does it matter? Write 3-5 substantive paragraphs.
+Set the stage, give the reader a reason to care, and provide enough background
+that someone unfamiliar with the subject can follow what comes next.)
+
+## Key Ideas
+(Explain each core concept with clarity and depth. Use a sub-heading per concept.
+Under each sub-heading: define it, explain why it matters, and give a concrete
+example or analogy that makes it stick. Aim for 2-4 sentences per concept minimum.)
+
+## In Practice
+(Translate the ideas into real-world application. Use 3-4 paragraphs or concrete
+scenarios. What changes for a person who genuinely understands this? What mistakes
+do people make who don't? Give vivid, grounded examples.)
+
+## Worth Knowing
+(Go deeper — nuances, surprising context, common misconceptions corrected,
+historical background, or an illustrative story. 2-4 paragraphs. This section
+should make the reader feel they got more than they expected.)
+"""
 
 
 @_retry()
@@ -144,130 +190,28 @@ async def generate_notes(merged: MergedSummary, title: str) -> str:
     logger.info("notes_start")
     summary_text = json.dumps(merged.model_dump(), indent=2)
 
-    _NOTES_SYS_RELAXED = """\
-You are a master educator writing high-quality study notes.
-
-RULES:
-1. Use the structured summary as your guide.
-2. For illustrative sections (Stories / Anecdotes, Practical Applications, Common Mistakes, Final Takeaways),
-   invent examples or scenarios to make the concepts lively and actionable.
-3. Write in second person, active voice, present tense.
-4. Be specific and concrete — never vague.
-5. Include ALL sections.
-"""
-
-    _NOTES_USR_RELAXED = """\
-Write deep study notes for: "{title}"
-
-Use ONLY the structured summary below as your source where appropriate.
-
-{summary}
-
-Include EXACTLY these H2 headings (with emoji):
-
-## 🎯 Big Picture Overview
-## 🧠 Core Concepts Explained
-## ⚡ Key Points (Quick Revision)
-## 📖 Stories / Anecdotes / Examples
-## 🛠️ Practical Applications
-## ⚠️ Common Mistakes
-## 🏁 Final Takeaways
-"""
-
     resp = await _client.chat.completions.create(
         model=settings.sarvam_model,
         temperature=0.4,
+        max_tokens=4096,
         messages=[
-            {"role": "system", "content": _NOTES_SYS_RELAXED},
-            {"role": "user", "content": _NOTES_USR_RELAXED.format(title=title, summary=summary_text)},
+            {"role": "system", "content": _NOTES_SYS},
+            {"role": "user", "content": _NOTES_USR.format(title=title, summary=summary_text)},
         ],
     )
 
     notes = _strip(resp.choices[0].message.content or "")
-
-    # Add missing sections with concrete examples
-    for heading in _REQUIRED_SECTIONS:
-        if not any(line.strip().startswith("##") and heading in line for line in notes.splitlines()):
-            if heading == "📖 Stories / Anecdotes / Examples":
-                notes += (
-                    "\n\n## 📖 Stories / Anecdotes / Examples"
-                    "\n1. Imagine a yogi so full of energy that decades of work feel like a brief, joyful burst."
-                    "\n2. In a dark room, sensory deprivation helps you feel subtle energy surges and sharpen awareness."
-                    "\n3. A bat analogy: defy norms and societal expectations to focus on higher energy management practices."
-                )
-            elif heading == "🛠️ Practical Applications":
-                notes += (
-                    "\n\n## 🛠️ Practical Applications"
-                    "\n- Apply cold showers or contrast baths to sharpen energy awareness."
-                    "\n- Reduce screen time daily to rebuild neurological sensitivity."
-                )
-            elif heading == "⚠️ Common Mistakes":
-                notes += (
-                    "\n\n## ⚠️ Common Mistakes"
-                    "\n- Confusing time management with energy management."
-                    "\n- Overstimulation from screens and noise."
-                    "\n- Attempting renunciation as physical withdrawal instead of perspective."
-                )
-            elif heading == "🏁 Final Takeaways":
-                notes += (
-                    "\n\n## 🏁 Final Takeaways"
-                    "\n- Energy management is more important than time management."
-                    "\n- Detachment and sensory control heighten experience."
-                    "\n- High energy allows a short life to feel expansive."
-                )
-            else:
-                notes += f"\n\n## {heading}\nNo content available."
-
-    # Ensure proper spacing for lists
-    notes = re.sub(r"\n(- .+)", r"\n\n\1", notes)
-
     logger.info("notes_done", chars=len(notes))
     return notes
 
 
-# ── 5. Learning objectives ────────────────────────────────────────────────────
-
-_OBJ_SYS = """\
-You write precise, measurable learning objectives using Bloom's Taxonomy verbs
-(Define, Explain, Apply, Analyse, Compare, Implement, Evaluate…).
-
-Output ONLY a JSON array of strings — no other text, no fences.
-"""
-
-_OBJ_USR = """\
-From the study notes below, extract exactly 20-25 specific learning objectives.
-
-Steps: read notes → list distinct knowledge areas → write 1-2 objectives each →
-remove duplicates → confirm count is 20-25 → output JSON array.
-
-NOTES:
-{notes}
-"""
-
-
-@_retry()
-async def extract_objectives(notes: str) -> List[str]:
-    logger.info("objectives_start")
-    resp = await _client.chat.completions.create(
-        model=settings.sarvam_model,
-        temperature=0.4,
-        messages=[
-            {"role": "system", "content": _OBJ_SYS},
-            {"role": "user", "content": _OBJ_USR.format(notes=notes)},
-        ],
-    )
-    raw = _strip(resp.choices[0].message.content or "")
-    objectives: List[str] = json.loads(raw)
-    logger.info("objectives_done", count=len(objectives))
-    return objectives
-
-
 # ── Orchestrator ──────────────────────────────────────────────────────────────
 
-async def run_summarisation(transcript: str, title: str) -> Tuple[MergedSummary, str, List[str]]:
+async def run_summarisation(transcript: str, title: str) -> Tuple[MergedSummary, str]:
     chunks = chunk_transcript(transcript)
-    summaries = [await summarise_chunk(c, i) for i, c in enumerate(chunks)]
-    merged = merge_summaries(summaries)
+    summaries = await asyncio.gather(
+        *[summarise_chunk(c, i) for i, c in enumerate(chunks)]
+    )
+    merged = merge_summaries(list(summaries))
     notes = await generate_notes(merged, title)
-    objectives = await extract_objectives(notes)
-    return merged, notes, objectives
+    return merged, notes

@@ -35,7 +35,8 @@ async def _extract(step_input: StepInput) -> StepOutput:
         return StepOutput(content=meta.model_dump(), success=True)
     except Exception as exc:
         log.error("failed", error=str(exc))
-        return StepOutput(content=None, success=False, error=str(exc))
+        # Store the error in content so _assemble can surface it as a 422
+        return StepOutput(content={"_failed": True, "_error": str(exc)}, success=False)
 
 
 async def _summarise(step_input: StepInput) -> StepOutput:
@@ -44,13 +45,12 @@ async def _summarise(step_input: StepInput) -> StepOutput:
     try:
         meta_d = _safe_load(step_input.get_step_content("extract_video"), {})
         meta = VideoMeta(**meta_d)
-        merged, notes, objectives = await run_summarisation(meta.transcript, meta.title)
+        merged, notes = await run_summarisation(meta.transcript, meta.title)
         payload = {
             "merged_summary": merged.model_dump(),
             "notes_markdown": notes,
-            "learning_objectives": objectives,
         }
-        log.info("done", objectives=len(objectives))
+        log.info("done")
         return StepOutput(content=payload, success=True)
     except Exception as exc:
         log.error("failed", error=str(exc))
@@ -61,16 +61,19 @@ async def _quiz(step_input: StepInput) -> StepOutput:
     log = logger.bind(step="quiz_generation")
     log.info("start")
     try:
-        summ = _safe_load(step_input.get_step_content("summarisation"), {})
-        items = await generate_quiz(
-            notes_md=summ.get("notes_markdown", ""),
-            objectives=summ.get("learning_objectives", []),
-        )
+        meta_d = _safe_load(step_input.get_step_content("extract_video"), {})
+        meta = VideoMeta(**meta_d)
+
+        # Always use raw transcript, capped at 8000 words
+        words = meta.transcript.split()
+        content = " ".join(words[:8000]) if len(words) > 8000 else meta.transcript
+
+        items = await generate_quiz(content=content)
         log.info("done", questions=len(items))
         return StepOutput(content=[i.model_dump() for i in items], success=True)
     except Exception as exc:
         log.error("failed", error=str(exc))
-        return StepOutput(content=None, success=False, error=str(exc))
+        return StepOutput(content={"_failed": True, "_error": str(exc)}, success=False)
 
 
 async def _eval(step_input: StepInput) -> StepOutput:
@@ -85,7 +88,6 @@ async def _eval(step_input: StepInput) -> StepOutput:
         result = await evaluate_output(
             transcript=meta.transcript,
             notes_md=summ.get("notes_markdown", ""),
-            objectives=summ.get("learning_objectives", []),
             quiz=[MCQItem(**q) for q in quiz_raw],
         )
         log.info("done", overall=result.overall, passed=result.passed)
@@ -100,11 +102,15 @@ async def _eval(step_input: StepInput) -> StepOutput:
 
 async def _assemble(step_input: StepInput) -> StepOutput:
     meta_d = _safe_load(step_input.get_step_content("extract_video"), {})
+    if meta_d.get("_failed"):
+        raise ValueError(meta_d.get("_error", "Video extraction failed."))
     summ_d = _safe_load(
         step_input.get_step_content("summarisation"),
-        {"notes_markdown": "", "learning_objectives": []},
+        {"notes_markdown": ""},
     )
-    quiz_d = _safe_load(step_input.get_step_content("quiz_generation"), [])
+    quiz_raw = _safe_load(step_input.get_step_content("quiz_generation"), None)
+    quiz_failed = isinstance(quiz_raw, dict) and quiz_raw.get("_failed")
+    quiz_items = [] if quiz_failed or quiz_raw is None else quiz_raw
     eval_d = _safe_load(step_input.get_step_content("eval"), {})
 
     overall = eval_d.get("overall", "warn")
@@ -113,8 +119,8 @@ async def _assemble(step_input: StepInput) -> StepOutput:
     payload = {
         "video_title": meta_d.get("title", "Unknown"),
         "summary_markdown": summ_d.get("notes_markdown", ""),
-        "learning_objectives": summ_d.get("learning_objectives", []),
-        "quiz": quiz_d,
+        "quiz": quiz_items,
+        "quiz_generation_failed": bool(quiz_failed),
         "eval_passed": eval_passed,
     }
 

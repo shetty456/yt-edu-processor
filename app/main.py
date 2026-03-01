@@ -23,8 +23,8 @@ settings = get_settings()
 async def lifespan(_: FastAPI):
     logger.info(
         "startup",
-        sarvam=settings.sarvam_model,
-        eval=settings.openai_eval_model,
+        model=settings.sarvam_model,
+        max_concurrent=settings.max_concurrent_jobs,
     )
     yield
     logger.info("shutdown")
@@ -74,7 +74,7 @@ async def process_video(body: ProcessRequest) -> JSONResponse:
     log = logger.bind(url=body.youtube_url)
 
     # Basic concurrency guard
-    if sem._value == 0:  # type: ignore[attr-defined]
+    if sem.locked():
         raise HTTPException(
             status_code=429,
             detail="Server busy — retry in 30 seconds.",
@@ -120,6 +120,13 @@ async def process_video(body: ProcessRequest) -> JSONResponse:
             )
 
         payload: dict[str, Any] = run_output.content
+
+        # If _assemble raised but Agno swallowed it, the content will carry _failed
+        if payload.get("_failed"):
+            raise HTTPException(
+                status_code=422,
+                detail=payload.get("_error", "Video processing failed."),
+            )
 
         log.info(
             "processing_completed",

@@ -35,25 +35,57 @@ _yt = YouTubeTools()   # stateless — safe to share across requests
 
 # ── Educational keyword check ─────────────────────────────────────────────────
 _EDU_KEYWORDS = frozenset({
+    # Explicit learning signals
     "tutorial", "course", "lesson", "lecture", "learn", "learning",
     "study", "explained", "explanation", "how to", "how-to", "guide",
     "introduction", "beginner", "advanced", "fundamentals", "basics",
-    "programming", "coding", "software", "algorithm", "data structure",
-    "math", "mathematics", "calculus", "statistics",
-    "physics", "chemistry", "biology", "neuroscience",
-    "history", "economics", "finance", "investing",
-    "science", "engineering", "machine learning", "deep learning",
-    "artificial intelligence", "psychology", "philosophy",
     "workshop", "training", "bootcamp", "masterclass", "crash course",
+    "seminar", "talk", "understanding", "insight", "knowledge", "breakdown",
+    # Institutions
     "mit", "stanford", "harvard", "coursera", "khan academy", "edx",
-    "university", "college", "professor", "dr.", "phd",
-    "chapter", "module", "documentary", "analysis", "breakdown", "sadhguru",
+    "university", "college", "professor", "academy", "dr.", "phd",
+    # STEM
+    "programming", "coding", "software", "algorithm", "data structure",
+    "math", "mathematics", "calculus", "statistics", "physics", "chemistry",
+    "biology", "neuroscience", "data", "machine learning", "deep learning",
+    "artificial intelligence", "quantum", "engineering", "science",
+    # Social sciences
+    "economics", "finance", "investing", "psychology", "sociology",
+    "anthropology", "law", "ethics", "political science",
+    # Philosophy & wisdom
+    "philosophy", "consciousness", "awareness", "wisdom", "meditation",
+    "mindfulness", "enlightenment", "spirituality", "spiritual", "vedanta",
+    "yoga", "stoicism", "buddhism", "metaphysics",
+    # Humanities
+    "history", "literature", "art", "culture", "mythology", "religion",
+    "theology", "linguistics", "poetry", "documentary", "analysis",
+    # Personal development
+    "leadership", "productivity", "habits", "critical thinking",
+    "self-improvement", "motivation", "decision making",
+    # Notable educator signals
+    "sadhguru", "krishnamurti", "watts", "tolle",
+})
+
+_NON_EDU_KEYWORDS = frozenset({
+    "let's play", "lets play", "gameplay", "playthrough",
+    "music video", "official video", "official audio", "lyrics",
+    "vlog", "daily vlog", "day in my life",
+    "reaction", "reacting to",
+    "prank", "challenge", "unboxing", "haul",
+    "trailer", "teaser", "episode", "season", "netflix",
+    "highlights", "compilation", "funny moments",
+    "roast", "beef", "drama",
 })
 
 
 def _is_educational(title: str, author: str) -> bool:
     combined = f"{title} {author}".lower()
     return any(kw in combined for kw in _EDU_KEYWORDS)
+
+
+def _is_clearly_non_educational(title: str, author: str) -> bool:
+    combined = f"{title} {author}".lower()
+    return any(kw in combined for kw in _NON_EDU_KEYWORDS)
 
 
 # ── Transcript cleaning ───────────────────────────────────────────────────────
@@ -159,8 +191,10 @@ async def extract_video(youtube_url: str) -> VideoMeta:
             f"Video is {duration / 3600:.1f} h long. Max supported is 2 hours."
         )
 
-    # 5. Educational check
-    if not _is_educational(title, author):
+    # 5. Educational check — pass if educational signal present; reject if
+    # non-educational signal present without any educational signal.
+    is_edu = _is_educational(title, author)
+    if not is_edu:
         raise ValueError(
             "Video does not appear to be educational. "
             "Only tutorials, lectures, courses, and similar content are supported."

@@ -41,7 +41,7 @@ class MCQItem(BaseModel):
 
 
 class QuizPayload(BaseModel):
-    quiz: Annotated[list[MCQItem], Field(min_length=15, max_length=15)]
+    quiz: Annotated[list[MCQItem], Field(min_length=10, max_length=15)]
 
     @field_validator("quiz")
     @classmethod
@@ -57,7 +57,6 @@ class QuizPayload(BaseModel):
 class ProcessResponse(BaseModel):
     video_title: str
     summary_markdown: str
-    learning_objectives: list[str]
     quiz: list[dict[str, Any]]
     eval_passed: bool
 
@@ -72,9 +71,9 @@ class VideoMeta(BaseModel):
 
 
 class ChunkSummary(BaseModel):
-    core_concepts: list[str] = Field(..., min_length=1)
+    core_concepts: list[str] = Field(default_factory=list)
     important_examples: list[str] = Field(default_factory=list)
-    key_points: list[str] = Field(..., min_length=1)
+    key_points: list[str] = Field(default_factory=list)
     definitions: list[str] = Field(default_factory=list)
 
 
@@ -99,7 +98,6 @@ class EvalResult(BaseModel):
     summary_grounded: bool
     quiz_answers_correct: bool
     quiz_descriptions_helpful: bool
-    objectives_measurable: bool
     issues: list[dict[str, str]] = Field(default_factory=list)
     confidence_score: float = Field(..., ge=0.0, le=1.0)
     recommendation: str
