@@ -5,12 +5,13 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.schemas import ProcessRequest, ProcessResponse
-from app.services.pipeline import run_pipeline
+from app.schemas import ProcessRequest, ProcessResponse, ProcessPDFResponse
+from app.services.pipeline import run_pipeline, run_pdf_pipeline
+from app.services.pdf_service import validate_pdf
 from app.utils import get_semaphore, logger
 
 settings = get_settings()
@@ -111,4 +112,45 @@ async def process_video(body: ProcessRequest) -> JSONResponse:
             eval_passed=payload.get("eval_passed"),
         )
 
+        return JSONResponse(content=payload)
+
+
+# -----------------------------
+# PDF Processing Endpoint
+# -----------------------------
+@app.post("/process-pdf", response_model=ProcessPDFResponse)
+async def process_pdf(file: UploadFile = File(...)) -> JSONResponse:
+    sem = get_semaphore()
+
+    if file.content_type != "application/pdf" and not (file.filename or "").endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
+
+    pdf_bytes = await file.read()
+
+    try:
+        await validate_pdf(pdf_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    if sem.locked():
+        raise HTTPException(status_code=429, detail="Server busy — retry in 30 seconds.")
+
+    async with sem:
+        log = logger.bind(filename=file.filename)
+        log.info("pdf_processing_started")
+
+        try:
+            payload = await asyncio.wait_for(
+                run_pdf_pipeline(pdf_bytes, file.filename or "document.pdf"),
+                timeout=settings.request_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Processing timed out.")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except Exception as exc:
+            log.error("pdf_unexpected_error", error=str(exc))
+            raise HTTPException(status_code=500, detail="Internal error. Please try again.")
+
+        log.info("pdf_processing_completed", title=payload.get("title"))
         return JSONResponse(content=payload)

@@ -11,12 +11,26 @@ class Settings(BaseSettings):
     sarvam_base_url: str = "https://api.sarvam.ai/v1"
     sarvam_model: str = "sarvam-m"
 
+    # Cloudinary
+    cloudinary_cloud_name: str
+    cloudinary_api_key: str
+    cloudinary_api_secret: str
+
+    # PDF limits
+    max_pdf_size_mb: int = 5
+    max_pdf_pages: int = 20
+
     # App behaviour
     max_concurrent_jobs: int = 5
     request_timeout_seconds: int = 360
     max_video_duration_seconds: int = 7200   # 2 hours
     chunk_word_limit: int = 6000             # trigger chunking above this
     chunk_target_words: int = 5000           # target words per chunk
+
+    # PDF pipeline (lower than YouTube — PDF text tokenizes much more densely)
+    pdf_chunk_word_limit: int = 1600         # force chunking at this threshold
+    pdf_chunk_target_words: int = 1600       # target words per chunk
+    pdf_quiz_word_limit: int = 2100          # max safe words for quiz prompt at 3 tokens/word
     log_level: str = "INFO"
 
 

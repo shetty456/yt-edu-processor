@@ -49,3 +49,5 @@ uvloop==0.22.1
 watchfiles==1.1.1
 websockets==16.0
 youtube-transcript-api==1.2.4
+cloudinary==1.42.1
+pypdf==5.1.0

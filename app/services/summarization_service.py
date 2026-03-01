@@ -47,9 +47,15 @@ def _strip(text: str) -> str:
 
 # ── 1. Chunking ───────────────────────────────────────────────────────────────
 
-def chunk_transcript(text: str) -> List[str]:
+def chunk_transcript(
+    text: str,
+    word_limit: int | None = None,
+    target_words: int | None = None,
+) -> List[str]:
+    limit = word_limit if word_limit is not None else settings.chunk_word_limit
+    target = target_words if target_words is not None else settings.chunk_target_words
     words = text.split()
-    if len(words) <= settings.chunk_word_limit:
+    if len(words) <= limit:
         return [text]
 
     sentences = re.split(r"(?<=[.!?])\s+", text)
@@ -58,7 +64,7 @@ def chunk_transcript(text: str) -> List[str]:
     wc = 0
     for s in sentences:
         sw = len(s.split())
-        if wc + sw > settings.chunk_target_words and current:
+        if wc + sw > target and current:
             chunks.append(" ".join(current))
             current, wc = [s], sw
         else:
@@ -207,8 +213,13 @@ async def generate_notes(merged: MergedSummary, title: str) -> str:
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────
 
-async def run_summarisation(transcript: str, title: str) -> Tuple[MergedSummary, str]:
-    chunks = chunk_transcript(transcript)
+async def run_summarisation(
+    transcript: str,
+    title: str,
+    chunk_word_limit: int | None = None,
+    chunk_target_words: int | None = None,
+) -> Tuple[MergedSummary, str]:
+    chunks = chunk_transcript(transcript, chunk_word_limit, chunk_target_words)
     summaries = await asyncio.gather(
         *[summarise_chunk(c, i) for i, c in enumerate(chunks)]
     )

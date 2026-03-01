@@ -55,7 +55,16 @@ class QuizPayload(BaseModel):
 # ── API response ──────────────────────────────────────────────────────────────
 
 class ProcessResponse(BaseModel):
+    youtube_url: str
     video_title: str
+    summary_markdown: str
+    quiz: list[dict[str, Any]]
+    eval_passed: bool
+
+
+class ProcessPDFResponse(BaseModel):
+    pdf_url: str
+    title: str
     summary_markdown: str
     quiz: list[dict[str, Any]]
     eval_passed: bool
