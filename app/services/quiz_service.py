@@ -63,8 +63,8 @@ ABSOLUTE RULES:
    named misconception. Never write a distractor that is merely "a bit off" or
    "partially correct." A learner who truly understands should instantly rule it out.
 7. Only ONE option should be clearly correct.
-8. The "description" must explain WHY the answer is correct AND why each wrong option
-   is wrong, in plain language.
+8. The "description" must explain WHY the correct answer is right — concisely, in plain
+   language. Do NOT enumerate why each wrong option is wrong.
 9. Output ONLY the raw JSON — no markdown fences, no text outside the object.
 """
 
@@ -102,7 +102,7 @@ Output ONLY this JSON:
       "question": "...",
       "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
       "answer": "A",
-      "description": "A is correct because... B is wrong because... C is wrong because... D is wrong because..."
+      "description": "Correct because [brief explanation of the underlying concept]."
     }}
   ]
 }}
