@@ -86,11 +86,7 @@ async def process_video(body: ProcessRequest) -> JSONResponse:
 
         try:
             payload = await asyncio.wait_for(
-                run_pipeline(
-                    body.youtube_url,
-                    transcript=body.transcript,
-                    duration_seconds=body.duration_seconds,
-                ),
+                run_pipeline(body.youtube_url),
                 timeout=settings.request_timeout_seconds,
             )
         except asyncio.TimeoutError:

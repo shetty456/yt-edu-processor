@@ -15,3 +15,7 @@ services:
         sync: false
       - key: CLOUDINARY_API_SECRET
         sync: false
+      - key: WEBSHARE_PROXY_USERNAME
+        sync: false
+      - key: WEBSHARE_PROXY_PASSWORD
+        sync: false

@@ -25,6 +25,7 @@ from functools import partial
 
 from agno.tools.youtube import YouTubeTools
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import WebshareProxyConfig
 
 from app.config import get_settings
 from app.schemas import VideoMeta
@@ -32,6 +33,16 @@ from app.utils import logger
 
 settings = get_settings()
 _yt = YouTubeTools()   # stateless — safe to share across requests
+
+
+def _make_proxy_config() -> WebshareProxyConfig | None:
+    s = get_settings()
+    if s.webshare_proxy_username and s.webshare_proxy_password:
+        return WebshareProxyConfig(
+            proxy_username=s.webshare_proxy_username,
+            proxy_password=s.webshare_proxy_password,
+        )
+    return None
 
 # ── Educational keyword check ─────────────────────────────────────────────────
 _EDU_KEYWORDS = frozenset({
@@ -129,24 +140,30 @@ def _get_metadata(url: str) -> dict:
 
 
 def _get_captions(url: str) -> str:
-    """YouTubeTools → youtube_transcript_api (free Python library)."""
-    result = _yt.get_youtube_video_captions(url)
-    if not result or result.startswith("Error") or result == "No captions found for video":
+    video_id = _yt.get_youtube_video_id(url)
+    proxy_config = _make_proxy_config()
+    api = YouTubeTranscriptApi(proxy_config=proxy_config) if proxy_config else YouTubeTranscriptApi()
+    try:
+        snippets = api.fetch(video_id)
+        if not snippets:
+            raise ValueError("No captions found for video. The video may not have English captions.")
+        return " ".join(s.text for s in snippets)
+    except Exception as e:
         raise ValueError(
-            f"No captions available: {result}. "
+            f"No captions available: {e}. "
             "The video may not have English captions."
         )
-    return result
 
 
 def _get_duration(video_id: str) -> int:
     """
     Compute duration from last transcript snippet timing.
-    Free — uses youtube_transcript_api, same library YouTubeTools wraps.
     Returns 0 if unavailable (duration check becomes a no-op).
     """
+    proxy_config = _make_proxy_config()
+    api = YouTubeTranscriptApi(proxy_config=proxy_config) if proxy_config else YouTubeTranscriptApi()
     try:
-        snippets = YouTubeTranscriptApi().fetch(video_id)
+        snippets = api.fetch(video_id)
         if snippets:
             last = snippets[-1]
             return int(last.start + last.duration)
@@ -157,11 +174,7 @@ def _get_duration(video_id: str) -> int:
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-async def extract_video(
-    youtube_url: str,
-    prefetched_transcript: str | None = None,
-    prefetched_duration: int | None = None,
-) -> VideoMeta:
+async def extract_video(youtube_url: str) -> VideoMeta:
     log  = logger.bind(url=youtube_url)
     loop = asyncio.get_running_loop()
 
@@ -179,19 +192,15 @@ async def extract_video(
     author = meta.get("author_name") or ""
     log.info("yt_metadata_ok", title=title)
 
-    # 3. Duration — use client-provided value if available, else fetch server-side
-    if prefetched_duration is not None:
-        duration = prefetched_duration
-        log.info("yt_duration_prefetched", duration_s=duration)
-    else:
-        log.info("yt_fetching_duration")
-        try:
-            duration = await asyncio.wait_for(
-                loop.run_in_executor(None, partial(_get_duration, video_id)), timeout=30
-            )
-        except Exception:
-            duration = 0
-            log.warning("yt_duration_unavailable")
+    # 3. Duration
+    log.info("yt_fetching_duration")
+    try:
+        duration = await asyncio.wait_for(
+            loop.run_in_executor(None, partial(_get_duration, video_id)), timeout=30
+        )
+    except Exception:
+        duration = 0
+        log.warning("yt_duration_unavailable")
 
     # 4. Validate duration
     if duration > 0 and duration > settings.max_video_duration_seconds:
@@ -199,8 +208,7 @@ async def extract_video(
             f"Video is {duration / 3600:.1f} h long. Max supported is 2 hours."
         )
 
-    # 5. Educational check — pass if educational signal present; reject if
-    # non-educational signal present without any educational signal.
+    # 5. Educational check
     is_edu = _is_educational(title, author)
     if not is_edu:
         raise ValueError(
@@ -208,15 +216,11 @@ async def extract_video(
             "Only tutorials, lectures, courses, and similar content are supported."
         )
 
-    # 6. Transcript — use client-provided value if available, else fetch server-side
-    if prefetched_transcript is not None:
-        raw = prefetched_transcript
-        log.info("yt_transcript_prefetched")
-    else:
-        log.info("yt_fetching_captions")
-        raw = await asyncio.wait_for(
-            loop.run_in_executor(None, partial(_get_captions, youtube_url)), timeout=60
-        )
+    # 6. Transcript
+    log.info("yt_fetching_captions")
+    raw = await asyncio.wait_for(
+        loop.run_in_executor(None, partial(_get_captions, youtube_url)), timeout=60
+    )
 
     # 7. Clean
     transcript = _clean(raw)

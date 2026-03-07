@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     pdf_quiz_word_limit: int = 2100          # max safe words for quiz prompt at 3 tokens/word
     log_level: str = "INFO"
 
+    # Webshare residential proxy (optional — falls back to direct if not set)
+    webshare_proxy_username: str | None = None
+    webshare_proxy_password: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:
