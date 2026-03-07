@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 class ProcessRequest(BaseModel):
     youtube_url: str
+    transcript: str | None = None          # pre-fetched by Flutter client
+    duration_seconds: int | None = None    # computed from caption timing on device
 
     @field_validator("youtube_url")
     @classmethod

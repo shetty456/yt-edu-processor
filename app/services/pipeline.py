@@ -14,12 +14,20 @@ from app.utils import logger
 
 
 
-async def run_pipeline(url: str) -> dict[str, Any]:
+async def run_pipeline(
+    url: str,
+    transcript: str | None = None,
+    duration_seconds: int | None = None,
+) -> dict[str, Any]:
     log = logger.bind(url=url)
     log.info("pipeline_start")
 
     # Step 1: Extract (must finish before anything else)
-    meta: VideoMeta = await extract_video(url)
+    meta: VideoMeta = await extract_video(
+        url,
+        prefetched_transcript=transcript,
+        prefetched_duration=duration_seconds,
+    )
     log.info("extract_done", title=meta.title, words=meta.word_count)
 
     # Step 2: Summarise + Quiz in parallel (both only need transcript)

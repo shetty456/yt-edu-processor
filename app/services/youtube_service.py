@@ -157,7 +157,11 @@ def _get_duration(video_id: str) -> int:
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-async def extract_video(youtube_url: str) -> VideoMeta:
+async def extract_video(
+    youtube_url: str,
+    prefetched_transcript: str | None = None,
+    prefetched_duration: int | None = None,
+) -> VideoMeta:
     log  = logger.bind(url=youtube_url)
     loop = asyncio.get_running_loop()
 
@@ -166,7 +170,7 @@ async def extract_video(youtube_url: str) -> VideoMeta:
     if not video_id:
         raise ValueError(f"Cannot parse a video ID from: {youtube_url}")
 
-    # 2. Metadata  (title, author via oEmbed — free)
+    # 2. Metadata  (title, author via oEmbed — free, not IP-blocked)
     log.info("yt_fetching_metadata")
     meta = await asyncio.wait_for(
         loop.run_in_executor(None, partial(_get_metadata, youtube_url)), timeout=30
@@ -175,15 +179,19 @@ async def extract_video(youtube_url: str) -> VideoMeta:
     author = meta.get("author_name") or ""
     log.info("yt_metadata_ok", title=title)
 
-    # 3. Duration  (from transcript snippet timing — free)
-    log.info("yt_fetching_duration")
-    try:
-        duration = await asyncio.wait_for(
-            loop.run_in_executor(None, partial(_get_duration, video_id)), timeout=30
-        )
-    except Exception:
-        duration = 0
-        log.warning("yt_duration_unavailable")
+    # 3. Duration — use client-provided value if available, else fetch server-side
+    if prefetched_duration is not None:
+        duration = prefetched_duration
+        log.info("yt_duration_prefetched", duration_s=duration)
+    else:
+        log.info("yt_fetching_duration")
+        try:
+            duration = await asyncio.wait_for(
+                loop.run_in_executor(None, partial(_get_duration, video_id)), timeout=30
+            )
+        except Exception:
+            duration = 0
+            log.warning("yt_duration_unavailable")
 
     # 4. Validate duration
     if duration > 0 and duration > settings.max_video_duration_seconds:
@@ -200,11 +208,15 @@ async def extract_video(youtube_url: str) -> VideoMeta:
             "Only tutorials, lectures, courses, and similar content are supported."
         )
 
-    # 6. Transcript  (via YouTubeTools → youtube_transcript_api — free)
-    log.info("yt_fetching_captions")
-    raw = await asyncio.wait_for(
-        loop.run_in_executor(None, partial(_get_captions, youtube_url)), timeout=60
-    )
+    # 6. Transcript — use client-provided value if available, else fetch server-side
+    if prefetched_transcript is not None:
+        raw = prefetched_transcript
+        log.info("yt_transcript_prefetched")
+    else:
+        log.info("yt_fetching_captions")
+        raw = await asyncio.wait_for(
+            loop.run_in_executor(None, partial(_get_captions, youtube_url)), timeout=60
+        )
 
     # 7. Clean
     transcript = _clean(raw)
