@@ -206,7 +206,9 @@ async def generate_notes(merged: MergedSummary, title: str) -> str:
         ],
     )
 
-    notes = _strip(resp.choices[0].message.content or "")
+    notes = resp.choices[0].message.content or ""
+    notes = re.sub(r"^```(?:markdown|md)?\s*\n?", "", notes.strip())
+    notes = re.sub(r"\n?```\s*$", "", notes).strip()
     logger.info("notes_done", chars=len(notes))
     return notes
 
