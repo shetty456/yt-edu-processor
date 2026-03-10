@@ -6,7 +6,7 @@ Questions are framed as universal knowledge tests — no reference to "the video
 "the speaker". Attempt 1 → standard prompt → Pydantic validate.
 Attempt 2 → strict repair prompt with failed response as context → Pydantic validate.
 Raises ValueError if both fail.
-Temperature: 0.25
+Temperature: 0.35
 """
 from __future__ import annotations
 
@@ -37,7 +37,9 @@ def _strip(text: str) -> str:
 
 
 _QUIZ_SYS = """\
-You are an expert quiz writer for an online learning platform.
+You are an expert quiz writer calibrated to CBSE/ICSE Class 10-12 HOTS (Higher Order
+Thinking Skills) standard. Every question you write must target Bloom's Taxonomy
+Level 4 (Analysis), Level 5 (Evaluation), or Level 6 (Synthesis) — never Level 1-3.
 
 Your questions will be shown to learners WITHOUT any reference material —
 they must stand alone as knowledge tests about the subject domain.
@@ -50,49 +52,86 @@ ABSOLUTE RULES:
 3. Questions must be answerable by a subject-matter expert who has NEVER heard
    this particular story or watched this video — they should be answerable from
    general knowledge of the domain.
-4. Every question tests either (a) conceptual understanding of a domain idea or
-   (b) practical application of a domain principle in a scenario.
-5. FORBIDDEN question stems:
+4. EVERY question must connect at least TWO distinct domain concepts. Questions
+   that test only a single isolated fact or definition are forbidden.
+5. FORBIDDEN question stems — any question beginning with these patterns is rejected:
+   - "What is [X]?" (bare definition recall)
+   - "What does [X] mean?"
+   - "Define [X]."
+   - "Which of the following is true about [X]?" (fact-list recall)
+   - "What is the definition of..."
    - "What does [X] symbolize in..."
    - "What is the lesson of..."
-   - "What does the story/parable/teaching convey..."
-   - "What broader principle does [X] illustrate..."
    - "According to [character]..."
    - "What did [character] teach about..."
-6. Distractors must be DEFINITIVELY WRONG — each should represent a specific,
-   named misconception. Never write a distractor that is merely "a bit off" or
-   "partially correct." A learner who truly understands should instantly rule it out.
-7. Only ONE option should be clearly correct.
-8. The "description" must explain WHY the correct answer is right — concisely, in plain
-   language. Do NOT enumerate why each wrong option is wrong.
-9. Output ONLY the raw JSON — no markdown fences, no text outside the object.
+6. REQUIRED question stems — every question must use an analytical or evaluative frame:
+   - "Why does [X] lead to [Y]?" (cause-effect analysis)
+   - "What distinguishes [X] from [Y] in terms of [criterion]?" (analytical distinction)
+   - "If [condition], what would happen to [outcome] and why?" (hypothetical evaluation)
+   - "A student argues [claim]. What is the flaw in this reasoning?" (critical evaluation)
+   - "Under which condition would [principle A] apply rather than [principle B]?" (synthesis)
+   - "Given [scenario], which [concept] best explains [observation] and why?" (application + analysis)
+7. Distractors must represent PLAUSIBLE conceptual errors — the mistake a student with
+   surface memorization (but not deep understanding) would make. Each distractor should
+   correspond to a specific named misconception. They must NOT be obviously false or
+   trivially distinguishable.
+8. Only ONE option should be clearly correct to someone with genuine understanding.
+9. The "description" must explain WHY the correct answer is right by naming the
+   underlying principle and explaining the reasoning path — minimum 2 sentences.
+10. Output ONLY the raw JSON — no markdown fences, no text outside the object.
 """
 
 _QUIZ_USR = """\
 Use the transcript below as source material to identify the subject domain and its
-core concepts. Then write 10-15 MCQs that test understanding of THAT DOMAIN — not
-comprehension of this particular transcript.
+core concepts. Then write 10-15 MCQs at CBSE/ICSE Class 10-12 HOTS difficulty —
+questions that require analysis, evaluation, or synthesis, not surface recall.
 
 Approach:
-1. Read the transcript and extract the underlying domain (e.g., "karma and spiritual
-   effort in yogic philosophy", "machine learning fundamentals", "fiscal policy").
-2. Identify 10-15 specific concepts, principles, or applied scenarios from that domain.
-3. For each concept, write a question a textbook on this subject might ask — one that
-   is answerable without this specific transcript.
+1. Read the transcript and extract the underlying domain (e.g., "electrochemistry",
+   "macroeconomic policy", "Mendelian genetics", "Newtonian mechanics").
+2. Identify 12-16 specific concepts, principles, distinctions, and causal relationships
+   from that domain. Do NOT identify definitions — identify relationships and mechanisms.
+3. For each question slot, select TWO or more related concepts and write a question that
+   requires the student to reason about the relationship between them. A CBSE HOTS
+   examiner would include this question in a Class 12 board paper.
 
-Mix of question types:
-- Concept questions (6-8): test definitions, cause-effect relationships, distinctions
-  between related ideas — framed in domain terms, not story terms.
-- Application questions (4-7): present a novel scenario and ask which principle applies
-  or what outcome follows — no references to characters or events from the transcript.
+Required question distribution (total 10-15):
+- TYPE A — Analytical Distinction (2-3 questions):
+    Frame: "What distinguishes [concept X] from [concept Y] specifically in the context
+    of [criterion or condition]?"
+    Tests: ability to separate closely related ideas by a meaningful criterion.
+
+- TYPE B — Cause-Effect / Mechanism Analysis (5-6 questions):
+    Frame: "Why does [X] lead to [Y]?", "What would happen to [outcome] if [condition
+    changed], and through what mechanism?", "Which step in [process] is rate-limiting
+    and why?"
+    Tests: understanding of mechanisms, not just outcomes.
+
+- TYPE C — Evaluation / Synthesis (3-4 questions, hardest):
+    Frame: "Given [scenario], which principle from [domain] best accounts for
+    [observation] and why?", "A student claims [X]. Under what conditions is this claim
+    valid, and where does it break down?", "If you were to [design/choose/predict],
+    which approach is correct and on what basis?"
+    Tests: applying the right principle to a novel or edge-case scenario.
+
+BANNED question patterns — do not produce any question that:
+- Begins with "What is [X]?" or "What does [X] mean?" or "Define [X]."
+- Begins with "Which of the following is true about [X]?" (fact-list recall)
+- Tests only a single concept in isolation without requiring reasoning about a relationship
+- Has a correct answer that could be retrieved by memorizing a single textbook sentence
 
 Distractor quality requirement:
-- Each wrong option must be CLEARLY wrong and represent a specific, common misconception
-  about the domain. Label the misconception mentally as you write it.
-- Avoid writing "partially true" or "adjacent" options that a thoughtful person could
-  argue for.
+- Each wrong option must represent a specific conceptual error a student with
+  surface-level memorization would plausibly make. Name the misconception mentally
+  as you write it (e.g., "confusing rate with equilibrium constant",
+  "conflating correlation with causation", "reversing cause and effect").
+- Distractors must NOT be obviously false, trivially distinguishable, or
+  "partially true" in a way a careful student could argue for.
+- Each distractor should be the kind of answer a student who studied definitions
+  but not mechanisms would choose.
 
-Source transcript (extract domain knowledge from this; do NOT quote it in questions):
+Source transcript (extract domain concepts and relationships from this;
+do NOT quote it in questions):
 {content}
 
 Output ONLY this JSON:
@@ -102,7 +141,8 @@ Output ONLY this JSON:
       "question": "...",
       "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
       "answer": "A",
-      "description": "Correct because [brief explanation of the underlying concept]."
+      "description": "Correct because [name the principle and explain the reasoning
+      path — minimum 2 sentences]."
     }}
   ]
 }}
@@ -149,7 +189,7 @@ def _shuffle_answer(item: MCQItem) -> MCQItem:
 async def _call(system: str, user: str) -> str:
     resp = await _client.chat.completions.create(
         model=settings.sarvam_model,
-        temperature=0.25,
+        temperature=0.35,
         max_tokens=4096,
         response_format={"type": "json_object"},
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
