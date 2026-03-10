@@ -97,4 +97,8 @@ async def infer_pdf_title(text: str) -> str:
         temperature=0.2,
         max_tokens=30,
     )
-    return resp.choices[0].message.content.strip().strip('"\'')
+    raw = resp.choices[0].message.content
+    # Strip reasoning tags emitted by thinking models (e.g. sarvam-m)
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    raw = re.sub(r"<think>", "", raw)
+    return raw.strip().strip('"\'')

@@ -139,37 +139,34 @@ def _get_metadata(url: str) -> dict:
     return json.loads(raw)
 
 
-def _get_captions(url: str) -> str:
-    video_id = _yt.get_youtube_video_id(url)
-    proxy_config = _make_proxy_config()
-    api = YouTubeTranscriptApi(proxy_config=proxy_config) if proxy_config else YouTubeTranscriptApi()
-    try:
-        snippets = api.fetch(video_id)
-        if not snippets:
-            raise ValueError("No captions found for video. The video may not have English captions.")
-        return " ".join(s.text for s in snippets)
-    except Exception as e:
-        raise ValueError(
-            f"No captions available: {e}. "
-            "The video may not have English captions."
-        )
-
-
-def _get_duration(video_id: str) -> int:
+def _fetch_transcript(video_id: str) -> tuple[str, int]:
     """
-    Compute duration from last transcript snippet timing.
-    Returns 0 if unavailable (duration check becomes a no-op).
+    Fetch transcript once and return (raw_text, duration_seconds).
+    Tries proxied connection first; falls back to direct on failure.
+    Raises ValueError if captions are unavailable via both paths.
     """
     proxy_config = _make_proxy_config()
-    api = YouTubeTranscriptApi(proxy_config=proxy_config) if proxy_config else YouTubeTranscriptApi()
-    try:
-        snippets = api.fetch(video_id)
-        if snippets:
+    attempts = [True, False] if proxy_config else [False]
+    last_exc: Exception | None = None
+
+    for use_proxy in attempts:
+        try:
+            cfg = proxy_config if use_proxy else None
+            api = YouTubeTranscriptApi(proxy_config=cfg) if cfg else YouTubeTranscriptApi()
+            snippets = api.fetch(video_id)
+            if not snippets:
+                continue
+            raw = " ".join(s.text for s in snippets)
             last = snippets[-1]
-            return int(last.start + last.duration)
-    except Exception:
-        pass
-    return 0
+            duration = int(last.start + last.duration)
+            return raw, duration
+        except Exception as exc:
+            last_exc = exc
+
+    raise ValueError(
+        f"No captions available: {last_exc}. "
+        "The video may not have English captions."
+    )
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -192,37 +189,26 @@ async def extract_video(youtube_url: str) -> VideoMeta:
     author = meta.get("author_name") or ""
     log.info("yt_metadata_ok", title=title)
 
-    # 3. Duration
-    log.info("yt_fetching_duration")
-    try:
-        duration = await asyncio.wait_for(
-            loop.run_in_executor(None, partial(_get_duration, video_id)), timeout=30
-        )
-    except Exception:
-        duration = 0
-        log.warning("yt_duration_unavailable")
-
-    # 4. Validate duration
-    if duration > 0 and duration > settings.max_video_duration_seconds:
-        raise ValueError(
-            f"Video is {duration / 3600:.1f} h long. Max supported is 2 hours."
-        )
-
-    # 5. Educational check
-    is_edu = _is_educational(title, author)
-    if not is_edu:
+    # 3. Educational check (fast — no network call)
+    if not _is_educational(title, author):
         raise ValueError(
             "Video does not appear to be educational. "
             "Only tutorials, lectures, courses, and similar content are supported."
         )
 
-    # 6. Transcript
-    log.info("yt_fetching_captions")
-    raw = await asyncio.wait_for(
-        loop.run_in_executor(None, partial(_get_captions, youtube_url)), timeout=60
+    # 4. Fetch transcript once → raw text + duration
+    log.info("yt_fetching_transcript")
+    raw, duration = await asyncio.wait_for(
+        loop.run_in_executor(None, partial(_fetch_transcript, video_id)), timeout=60
     )
 
-    # 7. Clean
+    # 5. Validate duration
+    if duration > 0 and duration > settings.max_video_duration_seconds:
+        raise ValueError(
+            f"Video is {duration / 3600:.1f} h long. Max supported is 2 hours."
+        )
+
+    # 6. Clean
     transcript = _clean(raw)
     word_count = len(transcript.split())
     if word_count < 50:
