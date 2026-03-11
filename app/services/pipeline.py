@@ -9,12 +9,13 @@ from app.services.summarization_service import run_summarisation
 from app.services.quiz_service import generate_quiz
 from app.services.eval_service import evaluate_output
 from app.utils import logger
+from app.cache import get_or_acquire, _set, _locks, yt_key, pdf_key
+from app.config import get_settings
 
 # imported lazily inside run_pdf_pipeline to avoid circular imports at module load
 
 
-
-async def run_pipeline(url: str) -> dict[str, Any]:
+async def _run_pipeline_inner(url: str) -> dict[str, Any]:
     log = logger.bind(url=url)
     log.info("pipeline_start")
 
@@ -58,7 +59,31 @@ async def run_pipeline(url: str) -> dict[str, Any]:
     return payload
 
 
-async def run_pdf_pipeline(pdf_bytes: bytes, filename: str) -> dict[str, Any]:
+async def run_pipeline(url: str) -> dict[str, Any]:
+    s = get_settings()
+    key = yt_key(url) if s.cache_ttl_seconds else None
+
+    if key:
+        cached, lock = await get_or_acquire(key)
+        if cached is not None:
+            logger.info("cache_hit", key=key)
+            return cached
+    else:
+        lock = None
+
+    try:
+        result = await _run_pipeline_inner(url)
+        if key and lock:
+            _set(key, result, s.cache_ttl_seconds)
+        return result
+    finally:
+        if lock:
+            lock.release()
+            if _locks.get(key) is lock:
+                _locks.pop(key, None)
+
+
+async def _run_pdf_pipeline_inner(pdf_bytes: bytes, filename: str) -> dict[str, Any]:
     from app.services.pdf_service import upload_pdf_to_cloudinary, extract_pdf_text, infer_pdf_title
 
     log = logger.bind(filename=filename)
@@ -78,8 +103,7 @@ async def run_pdf_pipeline(pdf_bytes: bytes, filename: str) -> dict[str, Any]:
     log.info("pdf_title_inferred", title=title)
 
     # Step 3: Summarise + Quiz in parallel
-    from app.config import get_settings as _get_settings
-    s = _get_settings()
+    s = get_settings()
     words = text.split()
     quiz_content = " ".join(words[:s.pdf_quiz_word_limit]) if len(words) > s.pdf_quiz_word_limit else text
 
@@ -115,3 +139,27 @@ async def run_pdf_pipeline(pdf_bytes: bytes, filename: str) -> dict[str, Any]:
     }
     log.info("pdf_pipeline_complete", title=title, eval_passed=eval_passed)
     return payload
+
+
+async def run_pdf_pipeline(pdf_bytes: bytes, filename: str) -> dict[str, Any]:
+    s = get_settings()
+    key = pdf_key(pdf_bytes) if s.cache_ttl_seconds else None
+
+    if key:
+        cached, lock = await get_or_acquire(key)
+        if cached is not None:
+            logger.info("cache_hit", key=key)
+            return cached
+    else:
+        lock = None
+
+    try:
+        result = await _run_pdf_pipeline_inner(pdf_bytes, filename)
+        if key and lock:
+            _set(key, result, s.cache_ttl_seconds)
+        return result
+    finally:
+        if lock:
+            lock.release()
+            if _locks.get(key) is lock:
+                _locks.pop(key, None)

@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     webshare_proxy_username: str | None = None
     webshare_proxy_password: str | None = None
 
+    # Response cache
+    cache_ttl_seconds: int = 86400  # 24 hours; set 0 to disable
+    cache_max_size: int = 500       # max cached responses (each ~5–20 KB)
+
 
 @lru_cache
 def get_settings() -> Settings:
