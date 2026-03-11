@@ -37,13 +37,39 @@ def _api_retry():
 def _strip(text: str) -> str:
     text = re.sub(r"^```(?:json)?\s*\n?", "", text.strip())
     text = re.sub(r"\n?```\s*$", "", text).strip()
-    brace = text.find("{")
-    if brace > 0:
-        text = text[brace:]
-    rbrace = text.rfind("}")
-    if rbrace >= 0 and rbrace < len(text) - 1:
-        text = text[:rbrace + 1]
+    # Find the first JSON structure opener: object '{' or array '['
+    obj = text.find("{")
+    arr = text.find("[")
+    if obj < 0:
+        start = arr
+    elif arr < 0:
+        start = obj
+    else:
+        start = min(obj, arr)
+    if start > 0:
+        text = text[start:]
+    # Trim trailing text after the closing bracket/brace
+    if text.startswith("["):
+        rbracket = text.rfind("]")
+        if rbracket >= 0 and rbracket < len(text) - 1:
+            text = text[:rbracket + 1]
+    else:
+        rbrace = text.rfind("}")
+        if rbrace >= 0 and rbrace < len(text) - 1:
+            text = text[:rbrace + 1]
     return text.strip()
+
+
+_RECALL_PATTERNS = re.compile(
+    r"^(how many|at which stage|which (structure|enzyme|organelle|cell|stage|type)|"
+    r"what is (the|a|an)|what are the|define |name the|"
+    r"which of the following is (true|correct|false))",
+    re.IGNORECASE,
+)
+
+
+def _is_recall_question(q: "MCQItem") -> bool:
+    return bool(_RECALL_PATTERNS.match(q.question.strip()))
 
 
 _QUIZ_SYS = """\
@@ -89,6 +115,20 @@ ABSOLUTE RULES:
 9. The "description" must explain WHY the correct answer is right by naming the
    underlying principle and explaining the reasoning path — minimum 2 sentences.
 10. Output ONLY the raw JSON — no markdown fences, no text outside the object.
+
+CONCRETE EXAMPLES — pattern to follow:
+  BAD (Level 1 — rejected): "What is the role of callase?"
+  GOOD (Level 4 — required): "Why does premature callase activity before pollen maturity
+    lead to male sterility, and which agricultural application exploits this mechanism?"
+
+  BAD (Level 1 — rejected): "How many microspores are produced per meiosis?"
+  GOOD (Level 4 — required): "A mutation causes a PMC to complete only meiosis I before
+    arrest. What is the immediate consequence for pollen count and ploidy, and why?"
+
+  BAD (Level 1 — rejected): "At which stage are pollen grains shed?"
+  GOOD (Level 5 — required): "What distinguishes a bicellular pollen grain from a
+    tricellular one in terms of developmental timing, and which condition determines
+    which type a species produces?"
 """
 
 _QUIZ_USR = """\
@@ -143,7 +183,7 @@ Distractor quality requirement:
 Source transcript (extract domain concepts and relationships from this;
 do NOT quote it in questions):
 {content}
-
+{concept_section}
 Output ONLY this JSON:
 {{
   "quiz": [
@@ -158,13 +198,44 @@ Output ONLY this JSON:
 }}
 """
 
+_CONCEPTS_SYS = """\
+You are a domain-analysis assistant. Your only task is to extract concept-pairs and
+their causal / mechanistic relationships from the provided educational transcript.
+Output ONLY a raw JSON array — no markdown fences, no explanation.
+"""
+
+_CONCEPTS_USR = """\
+Read the transcript below and extract 12-16 concept-pairs that capture the most
+important mechanisms, causal chains, or analytical distinctions in the domain.
+
+For each pair output:
+  "concept_a"    — first concept or process
+  "concept_b"    — second concept or process
+  "relationship" — one sentence describing the causal, functional, or contrastive link
+                   between them (e.g. "X triggers Y by …", "X differs from Y in that …")
+
+Only relationships — no isolated definitions.
+
+Transcript:
+{content}
+
+Output ONLY this JSON:
+[
+  {{"concept_a": "...", "concept_b": "...", "relationship": "..."}},
+  ...
+]
+"""
+
 _REPAIR_SYS = """\
-Your previous response failed JSON schema validation.
+Your previous response either failed JSON schema validation or contained low-quality
+recall questions. Fix both issues and output corrected JSON.
 Output ONLY the raw JSON — no markdown, no explanation.
 The schema requires: top-level key "quiz", array of 10 to 15 objects,
 each with: question (str), options (A/B/C/D), answer (A|B|C|D), description (≥20 chars).
 All questions must be distinct. All 4 options per question must be distinct.
 Do NOT reference "the video", "the transcript", or "the speaker" in any question.
+Replace every rejected recall question with one using a Why / What-would-happen /
+What-distinguishes stem that requires reasoning about a relationship between two concepts.
 """
 
 
@@ -217,29 +288,86 @@ def _validate(raw: str) -> QuizPayload:
     return QuizPayload(**json.loads(_strip(raw)))
 
 
+async def _extract_concepts(content: str) -> str:
+    """Pass 1: extract concept-pairs from the transcript for chain-of-thought seeding."""
+    try:
+        raw = await _call(_CONCEPTS_SYS, _CONCEPTS_USR.format(content=content))
+        pairs = json.loads(_strip(raw))
+        if not isinstance(pairs, list) or len(pairs) == 0:
+            raise ValueError("empty concept list")
+        return json.dumps(pairs, indent=2)
+    except Exception as exc:
+        logger.bind(step="quiz").warning("concept_extract_failed", error=str(exc))
+        return ""  # fall through gracefully; question prompt still has transcript
+
+
 async def generate_quiz(content: str) -> list[MCQItem]:
     log = logger.bind(step="quiz")
-    user_prompt = _QUIZ_USR.format(content=content)
 
-    # Attempt 1
+    # ── Pass 1: chain-of-thought concept extraction ──────────────────────────
+    log.info("quiz_concept_extract")
+    concept_json = await _extract_concepts(content)
+    if concept_json:
+        concept_section = (
+            "\nPre-extracted concept-pairs (use these as seed material for your "
+            "questions — every question must be grounded in one of these relationships):\n"
+            f"{concept_json}\n"
+        )
+    else:
+        concept_section = ""
+
+    user_prompt = _QUIZ_USR.format(content=content, concept_section=concept_section)
+
+    # ── Pass 2: question generation ──────────────────────────────────────────
     log.info("quiz_attempt_1")
     raw1 = await _call(_QUIZ_SYS, user_prompt)
     try:
         items = _validate(raw1).quiz
-        return [_shuffle_answer(i) for i in items]
     except (json.JSONDecodeError, ValidationError, KeyError) as e:
         log.warning("quiz_attempt_1_failed", error=str(e))
+        items = None
 
-    # Attempt 2 — strict repair with failed response as context
+    # ── Recall filter ────────────────────────────────────────────────────────
+    if items is not None:
+        recall_items = [q for q in items if _is_recall_question(q)]
+        if recall_items:
+            log.warning(
+                "recall_questions_detected",
+                count=len(recall_items),
+                questions=[q.question for q in recall_items],
+            )
+        if len(recall_items) <= 2:
+            # Tolerable — drop the offenders and return the rest
+            good_items = [q for q in items if not _is_recall_question(q)]
+            if good_items:
+                return [_shuffle_answer(i) for i in good_items]
+        # More than 2 recall questions — fall through to repair
+
+    # ── Pass 3: repair (schema failure OR too many recall questions) ─────────
     log.info("quiz_attempt_2")
+    rejected_lines = ""
+    if items is not None:
+        recall_items = [q for q in items if _is_recall_question(q)]
+        if recall_items:
+            rejected_lines = (
+                "\n\nThe following questions were rejected for being surface recall "
+                "(Level 1-2). DO NOT repeat these patterns:\n"
+                + "\n".join(f"  - {q.question}" for q in recall_items)
+                + "\n\nReplace each with a Why / What-would-happen / "
+                  "What-distinguishes question that requires reasoning about a "
+                  "relationship between two concepts.\n"
+            )
+
     repair_user = (
         f"Your previous response:\n\n{raw1}\n\n"
-        f"Failed validation. Fix and output corrected JSON with 10 to 15 questions."
+        f"Failed validation or contained too many recall questions. "
+        f"Fix and output corrected JSON with 10 to 15 questions."
+        f"{rejected_lines}"
     )
     raw2 = await _call(_REPAIR_SYS, repair_user)
     try:
-        items = _validate(raw2).quiz
-        return [_shuffle_answer(i) for i in items]
+        items2 = _validate(raw2).quiz
+        return [_shuffle_answer(i) for i in items2]
     except (json.JSONDecodeError, ValidationError, KeyError) as e:
         log.error("quiz_both_failed", error=str(e))
         raise ValueError(f"Quiz generation failed after 2 attempts: {e}") from e
