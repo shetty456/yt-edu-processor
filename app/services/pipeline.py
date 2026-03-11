@@ -72,8 +72,9 @@ async def run_pdf_pipeline(pdf_bytes: bytes, filename: str) -> dict[str, Any]:
     if not text.strip():
         raise ValueError("Could not extract readable text from PDF.")
 
-    # Step 2: Infer title
-    title = await infer_pdf_title(text)
+    # Step 2: Infer title (falls back to filename stem on API error)
+    fallback_title = filename.rsplit(".", 1)[0].replace("-", " ").replace("_", " ").title()
+    title = await infer_pdf_title(text, fallback=fallback_title)
     log.info("pdf_title_inferred", title=title)
 
     # Step 3: Summarise + Quiz in parallel

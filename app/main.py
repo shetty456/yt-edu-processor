@@ -185,6 +185,8 @@ async def format_questions_endpoint(body: FormatQuestionsRequest) -> JSONRespons
             )
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504, detail="Formatting timed out.")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
         except Exception as exc:
             log.error("format_error", error=str(exc))
             raise HTTPException(status_code=500, detail="Internal error.")

@@ -11,10 +11,12 @@ Temperature: 0.35
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
 
 from pydantic import ValidationError
+from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 
 from app.config import get_settings
 from app.schemas import MCQItem, MCQOptions, QuizPayload
@@ -22,6 +24,14 @@ from app.utils import get_sarvam_client, logger, strip_think
 
 settings = get_settings()
 _client = get_sarvam_client()
+
+def _api_retry():
+    return retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1.5, min=2, max=20),
+        before_sleep=before_sleep_log(logging.getLogger("tenacity"), logging.WARNING),
+        reraise=True,
+    )
 
 
 def _strip(text: str) -> str:
@@ -186,12 +196,12 @@ def _shuffle_answer(item: MCQItem) -> MCQItem:
     )
 
 
+@_api_retry()
 async def _call(system: str, user: str) -> str:
     resp = await _client.chat.completions.create(
         model=settings.sarvam_model,
         temperature=0.35,
         max_tokens=4096,
-        response_format={"type": "json_object"},
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
     )
     raw = (resp.choices[0].message.content or "").strip()
@@ -199,6 +209,8 @@ async def _call(system: str, user: str) -> str:
 
 
 def _validate(raw: str) -> QuizPayload:
+    if not raw:
+        raise ValueError("Empty response from model")
     return QuizPayload(**json.loads(_strip(raw)))
 
 

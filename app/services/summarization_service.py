@@ -116,13 +116,14 @@ async def summarise_chunk(chunk: str, idx: int) -> ChunkSummary:
         model=settings.sarvam_model,
         temperature=0.4,
         max_tokens=2048,
-        response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": _CHUNK_SYS},
             {"role": "user", "content": _CHUNK_USR.format(chunk=chunk, words=len(chunk.split()))},
         ],
     )
     raw = _strip(strip_think(resp.choices[0].message.content or ""))
+    if not raw:
+        raise ValueError("Empty response from model")
     result = ChunkSummary(**json.loads(raw))
     log.info("chunk_done", key_points=len(result.key_points))
     return result

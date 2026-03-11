@@ -84,18 +84,26 @@ async def extract_pdf_text(pdf_bytes: bytes) -> str:
 
 
 async def upload_pdf_to_cloudinary(pdf_bytes: bytes, filename: str) -> str:
-    return await asyncio.to_thread(_upload_sync, pdf_bytes, filename)
+    try:
+        return await asyncio.to_thread(_upload_sync, pdf_bytes, filename)
+    except Exception as exc:
+        logger.warning("cloudinary_upload_failed", error=str(exc))
+        return ""  # pipeline continues; pdf_url will be empty in response
 
 
-async def infer_pdf_title(text: str) -> str:
+async def infer_pdf_title(text: str, fallback: str = "Untitled Document") -> str:
     snippet = " ".join(text.split()[:400])
     client = get_sarvam_client()
     s = get_settings()
-    resp = await client.chat.completions.create(
-        model=s.sarvam_model,
-        messages=[{"role": "user", "content": _TITLE_PROMPT.format(snippet=snippet)}],
-        temperature=0.2,
-        max_tokens=30,
-    )
-    raw = strip_think(resp.choices[0].message.content or "")
-    return raw.strip('"\'')
+    try:
+        resp = await client.chat.completions.create(
+            model=s.sarvam_model,
+            messages=[{"role": "user", "content": _TITLE_PROMPT.format(snippet=snippet)}],
+            temperature=0.2,
+            max_tokens=30,
+        )
+        raw = strip_think(resp.choices[0].message.content or "").strip('"\'')
+        return raw if raw else fallback
+    except Exception as exc:
+        logger.warning("title_inference_failed", error=str(exc), fallback=fallback)
+        return fallback
