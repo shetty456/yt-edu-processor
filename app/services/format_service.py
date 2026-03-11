@@ -6,6 +6,7 @@ Returns the formatted text string.
 """
 from __future__ import annotations
 import logging
+import re
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 from app.config import get_settings
 from app.utils import get_sarvam_client, logger, strip_think
@@ -65,6 +66,16 @@ async def format_questions(text: str) -> str:
         ],
     )
 
-    formatted = strip_think(resp.choices[0].message.content or "").strip()
+    raw = resp.choices[0].message.content or ""
+    formatted = strip_think(raw).strip()
+
+    # sarvam-m (thinking model) sometimes places the entire formatted output
+    # *inside* the <think> block with nothing after </think>.  strip_think then
+    # removes it all and returns "".  Fall back to extracting the think-block
+    # content, then to the raw string, so the textarea is never blanked.
+    if not formatted and raw.strip():
+        inner = re.search(r"<think>(.*?)</think>", raw, flags=re.DOTALL)
+        formatted = (inner.group(1).strip() if inner else raw.strip())
+
     log.info("format_done", chars=len(formatted))
     return formatted
