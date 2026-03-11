@@ -70,6 +70,14 @@ class ProcessPDFResponse(BaseModel):
     eval_passed: bool
 
 
+class FormatQuestionsRequest(BaseModel):
+    text: str = Field(..., min_length=10, description="Raw pasted quiz content")
+
+
+class FormatQuestionsResponse(BaseModel):
+    formatted_text: str
+
+
 # ── Internal pipeline DTOs ────────────────────────────────────────────────────
 
 class VideoMeta(BaseModel):

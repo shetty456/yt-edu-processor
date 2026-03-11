@@ -6,12 +6,14 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.schemas import ProcessRequest, ProcessResponse, ProcessPDFResponse
+from app.schemas import ProcessRequest, ProcessResponse, ProcessPDFResponse, FormatQuestionsRequest, FormatQuestionsResponse
 from app.services.pipeline import run_pipeline, run_pdf_pipeline
 from app.services.pdf_service import validate_pdf
+from app.services.format_service import format_questions as _format_questions
 from app.utils import get_semaphore, logger
 
 settings = get_settings()
@@ -35,6 +37,13 @@ app = FastAPI(
     title="YouTube Educational Content Processor",
     version="1.0.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # tighten to specific domains in production
+    allow_methods=["POST", "GET"],
+    allow_headers=["*"],
 )
 
 
@@ -154,3 +163,30 @@ async def process_pdf(file: UploadFile = File(...)) -> JSONResponse:
 
         log.info("pdf_processing_completed", title=payload.get("title"))
         return JSONResponse(content=payload)
+
+
+# -----------------------------
+# Format Questions Endpoint
+# -----------------------------
+@app.post("/format-questions", response_model=FormatQuestionsResponse)
+async def format_questions_endpoint(body: FormatQuestionsRequest) -> JSONResponse:
+    sem = get_semaphore()
+    log = logger.bind(endpoint="format-questions")
+
+    if sem.locked():
+        raise HTTPException(status_code=429, detail="Server busy — retry in 30 seconds.")
+
+    async with sem:
+        log.info("format_request_started", chars=len(body.text))
+        try:
+            formatted_text = await asyncio.wait_for(
+                _format_questions(body.text),
+                timeout=60,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Formatting timed out.")
+        except Exception as exc:
+            log.error("format_error", error=str(exc))
+            raise HTTPException(status_code=500, detail="Internal error.")
+
+        return JSONResponse(content={"formatted_text": formatted_text})
