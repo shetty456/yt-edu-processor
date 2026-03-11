@@ -150,7 +150,10 @@ async def evaluate_output(
             ],
         )
 
-        raw  = strip_think((resp.choices[0].message.content or "").strip())
+        content = (resp.choices[0].message.content or "").strip()
+        raw = strip_think(content)
+        if not raw:
+            raw = content  # fallback: model put JSON inside <think> block
         data = json.loads(_extract_json(raw))
         result = EvalResult(**data)
 

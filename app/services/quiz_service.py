@@ -204,8 +204,11 @@ async def _call(system: str, user: str) -> str:
         max_tokens=4096,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
     )
-    raw = (resp.choices[0].message.content or "").strip()
-    return strip_think(raw)
+    content = (resp.choices[0].message.content or "").strip()
+    raw = strip_think(content)
+    if not raw:
+        raw = content  # fallback: model put JSON inside <think> block
+    return raw
 
 
 def _validate(raw: str) -> QuizPayload:

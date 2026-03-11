@@ -121,7 +121,11 @@ async def summarise_chunk(chunk: str, idx: int) -> ChunkSummary:
             {"role": "user", "content": _CHUNK_USR.format(chunk=chunk, words=len(chunk.split()))},
         ],
     )
-    raw = _strip(strip_think(resp.choices[0].message.content or ""))
+    content = resp.choices[0].message.content or ""
+    raw = _strip(strip_think(content))
+    if not raw:
+        # Model put JSON inside <think> block — extract brace content directly
+        raw = _strip(content)
     if not raw:
         raise ValueError("Empty response from model")
     result = ChunkSummary(**json.loads(raw))
@@ -207,7 +211,11 @@ async def generate_notes(merged: MergedSummary, title: str) -> str:
         ],
     )
 
-    notes = strip_think(resp.choices[0].message.content or "")
+    content = resp.choices[0].message.content or ""
+    notes = strip_think(content)
+    if not notes and content.strip():
+        inner = re.search(r"<think>(.*?)</think>", content, flags=re.DOTALL)
+        notes = inner.group(1).strip() if inner else content.strip()
     notes = re.sub(r"^```(?:markdown|md)?\s*\n?", "", notes.strip())
     notes = re.sub(r"\n?```\s*$", "", notes).strip()
     logger.info("notes_done", chars=len(notes))
