@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import re
 import sys
 import logging
 import structlog
@@ -28,6 +29,14 @@ structlog.configure(
 )
 
 logger = structlog.get_logger()
+
+# ── Shared LLM helpers ────────────────────────────────────────────────────────
+
+def strip_think(text: str) -> str:
+    """Remove <think>...</think> reasoning blocks emitted by thinking models."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    return re.sub(r"<think>.*", "", text, flags=re.DOTALL).strip()
+
 
 # ── Concurrency semaphore ─────────────────────────────────────────────────────
 _semaphore: asyncio.Semaphore | None = None

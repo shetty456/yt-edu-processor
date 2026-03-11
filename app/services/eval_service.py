@@ -25,7 +25,7 @@ import re
 
 from app.config import get_settings
 from app.schemas import EvalResult, EvalSeverity, MCQItem
-from app.utils import get_sarvam_client, logger
+from app.utils import get_sarvam_client, logger, strip_think
 
 settings = get_settings()
 _client = get_sarvam_client()
@@ -150,7 +150,7 @@ async def evaluate_output(
             ],
         )
 
-        raw  = (resp.choices[0].message.content or "").strip()
+        raw  = strip_think((resp.choices[0].message.content or "").strip())
         data = json.loads(_extract_json(raw))
         result = EvalResult(**data)
 

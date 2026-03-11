@@ -10,7 +10,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_l
 
 from app.config import get_settings
 from app.schemas import ChunkSummary, MergedSummary
-from app.utils import get_sarvam_client, logger
+from app.utils import get_sarvam_client, logger, strip_think
 
 
 settings = get_settings()
@@ -122,7 +122,7 @@ async def summarise_chunk(chunk: str, idx: int) -> ChunkSummary:
             {"role": "user", "content": _CHUNK_USR.format(chunk=chunk, words=len(chunk.split()))},
         ],
     )
-    raw = _strip(resp.choices[0].message.content or "")
+    raw = _strip(strip_think(resp.choices[0].message.content or ""))
     result = ChunkSummary(**json.loads(raw))
     log.info("chunk_done", key_points=len(result.key_points))
     return result
@@ -206,7 +206,7 @@ async def generate_notes(merged: MergedSummary, title: str) -> str:
         ],
     )
 
-    notes = resp.choices[0].message.content or ""
+    notes = strip_think(resp.choices[0].message.content or "")
     notes = re.sub(r"^```(?:markdown|md)?\s*\n?", "", notes.strip())
     notes = re.sub(r"\n?```\s*$", "", notes).strip()
     logger.info("notes_done", chars=len(notes))

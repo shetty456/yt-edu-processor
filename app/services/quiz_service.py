@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from app.config import get_settings
 from app.schemas import MCQItem, MCQOptions, QuizPayload
-from app.utils import get_sarvam_client, logger
+from app.utils import get_sarvam_client, logger, strip_think
 
 settings = get_settings()
 _client = get_sarvam_client()
@@ -194,7 +194,8 @@ async def _call(system: str, user: str) -> str:
         response_format={"type": "json_object"},
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
     )
-    return (resp.choices[0].message.content or "").strip()
+    raw = (resp.choices[0].message.content or "").strip()
+    return strip_think(raw)
 
 
 def _validate(raw: str) -> QuizPayload:

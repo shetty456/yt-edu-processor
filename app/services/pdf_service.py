@@ -10,7 +10,7 @@ import cloudinary.uploader
 from pypdf import PdfReader
 
 from app.config import get_settings
-from app.utils import get_sarvam_client, logger
+from app.utils import get_sarvam_client, logger, strip_think
 
 _TITLE_PROMPT = """\
 Read the text below (first ~400 words of a document) and respond with ONLY a concise,
@@ -97,8 +97,5 @@ async def infer_pdf_title(text: str) -> str:
         temperature=0.2,
         max_tokens=30,
     )
-    raw = resp.choices[0].message.content
-    # Strip reasoning tags emitted by thinking models (e.g. sarvam-m)
-    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
-    raw = re.sub(r"<think>", "", raw)
-    return raw.strip().strip('"\'')
+    raw = strip_think(resp.choices[0].message.content or "")
+    return raw.strip('"\'')
