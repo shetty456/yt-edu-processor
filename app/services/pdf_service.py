@@ -12,14 +12,65 @@ from pypdf import PdfReader
 from app.config import get_settings
 from app.utils import get_sarvam_client, logger, strip_think
 
+_LANG_CODE_TO_NAME: dict[str, str] = {
+    "en": "English",
+    "kn": "Kannada",
+    "hi": "Hindi",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "ml": "Malayalam",
+    "mr": "Marathi",
+    "gu": "Gujarati",
+    "pa": "Punjabi",
+    "bn": "Bengali",
+    "ur": "Urdu",
+    "or": "Odia",
+    "as": "Assamese",
+    "fr": "French",
+    "de": "German",
+    "es": "Spanish",
+    "pt": "Portuguese",
+    "it": "Italian",
+    "nl": "Dutch",
+    "ru": "Russian",
+    "ar": "Arabic",
+    "zh-cn": "Chinese",
+    "zh-tw": "Chinese",
+    "ja": "Japanese",
+    "ko": "Korean",
+}
+
+
+def detect_language(text: str) -> str:
+    """Detect the primary language of *text*; returns a human-readable name.
+
+    Uses the first ~1000 characters for speed.  Falls back to ``"English"``
+    if detection fails, the sample is too short, or the code is not in the
+    mapping.
+    """
+    sample = text.strip()[:1000]
+    # langdetect is unreliable on very short or non-linguistic samples
+    if len(sample) < 20:
+        return "English"
+    try:
+        from langdetect import detect, DetectorFactory
+        DetectorFactory.seed = 42  # make detection deterministic
+        code = detect(sample)
+        return _LANG_CODE_TO_NAME.get(code, "English")
+    except Exception as exc:
+        logger.warning("language_detection_failed", error=str(exc))
+        return "English"
+
 _TITLE_PROMPT = """\
 Read the text below (first ~400 words of a document) and respond with ONLY a concise,
 descriptive title for this document — 5 to 10 words, title-case, no punctuation at the end.
-Do not explain, do not quote. Just the title.
+Do not explain, do not quote. Just the title.{lang_instruction}
 
 Text:
 {snippet}
 """
+
+_TITLE_LANG_INSTRUCTION = "\nRespond in {language}."
 
 
 def _init_cloudinary() -> None:
@@ -91,14 +142,24 @@ async def upload_pdf_to_cloudinary(pdf_bytes: bytes, filename: str) -> str:
         return ""  # pipeline continues; pdf_url will be empty in response
 
 
-async def infer_pdf_title(text: str, fallback: str = "Untitled Document") -> str:
+async def infer_pdf_title(
+    text: str,
+    fallback: str = "Untitled Document",
+    language: str = "English",
+) -> str:
     snippet = " ".join(text.split()[:400])
     client = get_sarvam_client()
     s = get_settings()
+    lang_instruction = (
+        _TITLE_LANG_INSTRUCTION.format(language=language)
+        if language != "English"
+        else ""
+    )
+    prompt = _TITLE_PROMPT.format(snippet=snippet, lang_instruction=lang_instruction)
     try:
         resp = await client.chat.completions.create(
             model=s.sarvam_model,
-            messages=[{"role": "user", "content": _TITLE_PROMPT.format(snippet=snippet)}],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=30,
         )

@@ -288,10 +288,13 @@ def _validate(raw: str) -> QuizPayload:
     return QuizPayload(**json.loads(_strip(raw)))
 
 
-async def _extract_concepts(content: str) -> str:
+async def _extract_concepts(content: str, language: str = "English") -> str:
     """Pass 1: extract concept-pairs from the transcript for chain-of-thought seeding."""
+    sys_prompt = _CONCEPTS_SYS
+    if language != "English":
+        sys_prompt += f"\nWrite all concept names and relationship descriptions in {language}."
     try:
-        raw = await _call(_CONCEPTS_SYS, _CONCEPTS_USR.format(content=content))
+        raw = await _call(sys_prompt, _CONCEPTS_USR.format(content=content))
         pairs = json.loads(_strip(raw))
         if not isinstance(pairs, list) or len(pairs) == 0:
             raise ValueError("empty concept list")
@@ -301,12 +304,12 @@ async def _extract_concepts(content: str) -> str:
         return ""  # fall through gracefully; question prompt still has transcript
 
 
-async def generate_quiz(content: str) -> list[MCQItem]:
+async def generate_quiz(content: str, language: str = "English") -> list[MCQItem]:
     log = logger.bind(step="quiz")
 
     # ── Pass 1: chain-of-thought concept extraction ──────────────────────────
     log.info("quiz_concept_extract")
-    concept_json = await _extract_concepts(content)
+    concept_json = await _extract_concepts(content, language=language)
     if concept_json:
         concept_section = (
             "\nPre-extracted concept-pairs (use these as seed material for your "
@@ -318,32 +321,42 @@ async def generate_quiz(content: str) -> list[MCQItem]:
 
     user_prompt = _QUIZ_USR.format(content=content, concept_section=concept_section)
 
+    quiz_sys = _QUIZ_SYS
+    if language != "English":
+        quiz_sys += (
+            f"\nWrite all questions, answer options, and descriptions in {language}."
+        )
+
     # ── Pass 2: question generation ──────────────────────────────────────────
     log.info("quiz_attempt_1")
-    raw1 = await _call(_QUIZ_SYS, user_prompt)
+    raw1 = await _call(quiz_sys, user_prompt)
     try:
         items = _validate(raw1).quiz
     except (json.JSONDecodeError, ValidationError, KeyError) as e:
         log.warning("quiz_attempt_1_failed", error=str(e))
         items = None
 
-    # ── Recall filter ────────────────────────────────────────────────────────
+    # ── Recall filter (English-only regex — skip for other languages) ────────
     if items is not None:
-        recall_items = [q for q in items if _is_recall_question(q)]
-        if recall_items:
-            log.warning(
-                "recall_questions_detected",
-                count=len(recall_items),
-                questions=[q.question for q in recall_items],
-            )
-        if len(recall_items) <= 2:
-            # Tolerable — drop the offenders and return the rest
-            good_items = [q for q in items if not _is_recall_question(q)]
-            if good_items:
-                return [_shuffle_answer(i) for i in good_items]
-        # More than 2 recall questions — fall through to repair
+        if language == "English":
+            recall_items = [q for q in items if _is_recall_question(q)]
+            if recall_items:
+                log.warning(
+                    "recall_questions_detected",
+                    count=len(recall_items),
+                    questions=[q.question for q in recall_items],
+                )
+            if len(recall_items) <= 2:
+                # Tolerable — drop the offenders and return the rest
+                good_items = [q for q in items if not _is_recall_question(q)]
+                if good_items:
+                    return [_shuffle_answer(i) for i in good_items]
+            # More than 2 recall questions — fall through to repair
+        else:
+            # Non-English: regex can't detect recall questions — trust the model
+            return [_shuffle_answer(i) for i in items]
 
-    # ── Pass 3: repair (schema failure OR too many recall questions) ─────────
+    # ── Pass 3: repair (schema failure OR too many English recall questions) ──
     log.info("quiz_attempt_2")
     rejected_lines = ""
     if items is not None:
@@ -364,7 +377,10 @@ async def generate_quiz(content: str) -> list[MCQItem]:
         f"Fix and output corrected JSON with 10 to 15 questions."
         f"{rejected_lines}"
     )
-    raw2 = await _call(_REPAIR_SYS, repair_user)
+    repair_sys = _REPAIR_SYS
+    if language != "English":
+        repair_sys += f"\nWrite all questions, answer options, and descriptions in {language}."
+    raw2 = await _call(repair_sys, repair_user)
     try:
         items2 = _validate(raw2).quiz
         return [_shuffle_answer(i) for i in items2]

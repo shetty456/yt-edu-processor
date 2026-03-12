@@ -84,7 +84,7 @@ async def run_pipeline(url: str) -> dict[str, Any]:
 
 
 async def _run_pdf_pipeline_inner(pdf_bytes: bytes, filename: str) -> dict[str, Any]:
-    from app.services.pdf_service import upload_pdf_to_cloudinary, extract_pdf_text, infer_pdf_title
+    from app.services.pdf_service import upload_pdf_to_cloudinary, extract_pdf_text, infer_pdf_title, detect_language
 
     log = logger.bind(filename=filename)
     log.info("pdf_pipeline_start")
@@ -97,9 +97,13 @@ async def _run_pdf_pipeline_inner(pdf_bytes: bytes, filename: str) -> dict[str, 
     if not text.strip():
         raise ValueError("Could not extract readable text from PDF.")
 
+    # Step 1b: Detect language of the extracted text (run in thread — langdetect is sync/CPU)
+    detected_language = await asyncio.to_thread(detect_language, text)
+    log.info("pdf_language_detected", language=detected_language)
+
     # Step 2: Infer title (falls back to filename stem on API error)
     fallback_title = filename.rsplit(".", 1)[0].replace("-", " ").replace("_", " ").title()
-    title = await infer_pdf_title(text, fallback=fallback_title)
+    title = await infer_pdf_title(text, fallback=fallback_title, language=detected_language)
     log.info("pdf_title_inferred", title=title)
 
     # Step 3: Summarise + Quiz in parallel
@@ -112,8 +116,9 @@ async def _run_pdf_pipeline_inner(pdf_bytes: bytes, filename: str) -> dict[str, 
             text, title,
             chunk_word_limit=s.pdf_chunk_word_limit,
             chunk_target_words=s.pdf_chunk_target_words,
+            language=detected_language,
         ),
-        generate_quiz(content=quiz_content),
+        generate_quiz(content=quiz_content, language=detected_language),
     )
     log.info("pdf_parallel_done", quiz_questions=len(quiz_items))
 

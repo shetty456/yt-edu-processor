@@ -109,15 +109,18 @@ CHUNK:
 
 
 @_retry()
-async def summarise_chunk(chunk: str, idx: int) -> ChunkSummary:
+async def summarise_chunk(chunk: str, idx: int, language: str = "English") -> ChunkSummary:
     log = logger.bind(chunk=idx, words=len(chunk.split()))
     log.info("chunk_start")
+    sys_prompt = _CHUNK_SYS
+    if language != "English":
+        sys_prompt += f"\nExtract and write all content in {language}."
     resp = await _client.chat.completions.create(
         model=settings.sarvam_model,
         temperature=0.4,
         max_tokens=2048,
         messages=[
-            {"role": "system", "content": _CHUNK_SYS},
+            {"role": "system", "content": sys_prompt},
             {"role": "user", "content": _CHUNK_USR.format(chunk=chunk, words=len(chunk.split()))},
         ],
     )
@@ -197,16 +200,23 @@ should make the reader feel they got more than they expected.)
 
 
 @_retry()
-async def generate_notes(merged: MergedSummary, title: str) -> str:
+async def generate_notes(merged: MergedSummary, title: str, language: str = "English") -> str:
     logger.info("notes_start")
     summary_text = json.dumps(merged.model_dump(), indent=2)
 
+    sys_prompt = _NOTES_SYS
+    if language != "English":
+        sys_prompt += (
+            f"\nRespond entirely in {language}. Write all prose, sub-headings, and explanations in {language}. "
+            f"The four H2 section headings (## Overview, ## Key Ideas, ## In Practice, ## Worth Knowing) "
+            f"must remain in English exactly as written."
+        )
     resp = await _client.chat.completions.create(
         model=settings.sarvam_model,
         temperature=0.4,
         max_tokens=4096,
         messages=[
-            {"role": "system", "content": _NOTES_SYS},
+            {"role": "system", "content": sys_prompt},
             {"role": "user", "content": _NOTES_USR.format(title=title, summary=summary_text)},
         ],
     )
@@ -229,11 +239,12 @@ async def run_summarisation(
     title: str,
     chunk_word_limit: int | None = None,
     chunk_target_words: int | None = None,
+    language: str = "English",
 ) -> Tuple[MergedSummary, str]:
     chunks = chunk_transcript(transcript, chunk_word_limit, chunk_target_words)
     summaries = await asyncio.gather(
-        *[summarise_chunk(c, i) for i, c in enumerate(chunks)]
+        *[summarise_chunk(c, i, language=language) for i, c in enumerate(chunks)]
     )
     merged = merge_summaries(list(summaries))
-    notes = await generate_notes(merged, title)
+    notes = await generate_notes(merged, title, language=language)
     return merged, notes
