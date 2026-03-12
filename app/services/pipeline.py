@@ -9,7 +9,7 @@ from app.services.summarization_service import run_summarisation
 from app.services.quiz_service import generate_quiz
 from app.services.eval_service import evaluate_output
 from app.utils import logger
-from app.cache import get_or_acquire, _set, _locks, yt_key, pdf_key
+from app.cache import get_or_acquire, _set, _locks, yt_key, pdf_key, web_key
 from app.config import get_settings
 
 # imported lazily inside run_pdf_pipeline to avoid circular imports at module load
@@ -160,6 +160,79 @@ async def run_pdf_pipeline(pdf_bytes: bytes, filename: str) -> dict[str, Any]:
 
     try:
         result = await _run_pdf_pipeline_inner(pdf_bytes, filename)
+        if key and lock:
+            _set(key, result, s.cache_ttl_seconds)
+        return result
+    finally:
+        if lock:
+            lock.release()
+            if _locks.get(key) is lock:
+                _locks.pop(key, None)
+
+
+async def _run_web_pipeline_inner(url: str) -> dict[str, Any]:
+    from app.services.web_service import fetch_and_extract
+    from app.services.pdf_service import detect_language
+
+    log = logger.bind(url=url)
+    log.info("web_pipeline_start")
+
+    # Step 1: Fetch and extract article text
+    title, text = await fetch_and_extract(url)  # raises ValueError on failure
+
+    # Step 2: Detect language
+    detected_language = await asyncio.to_thread(detect_language, text)
+    log.info("web_language_detected", language=detected_language)
+
+    # Step 3: Summarise + Quiz in parallel
+    s = get_settings()
+    words = text.split()
+    quiz_content = " ".join(words[:s.web_quiz_word_limit]) if len(words) > s.web_quiz_word_limit else text
+
+    (_, notes_markdown), quiz_items = await asyncio.gather(
+        run_summarisation(text, title, language=detected_language),
+        generate_quiz(content=quiz_content, language=detected_language),
+    )
+    log.info("web_parallel_done", quiz_questions=len(quiz_items))
+
+    # Step 4: Eval (graceful — never crashes the pipeline)
+    try:
+        eval_result = await evaluate_output(
+            transcript=text,
+            notes_md=notes_markdown,
+            quiz=quiz_items,
+        )
+        eval_passed = eval_result.passed
+        log.info("web_eval_done", overall=eval_result.overall, passed=eval_passed)
+    except Exception as exc:
+        log.error("web_eval_failed_gracefully", error=str(exc))
+        eval_passed = True
+
+    payload: dict[str, Any] = {
+        "source_url": url,
+        "title": title,
+        "summary_markdown": notes_markdown,
+        "quiz": [item.model_dump() for item in quiz_items],
+        "eval_passed": eval_passed,
+    }
+    log.info("web_pipeline_complete", title=title, eval_passed=eval_passed)
+    return payload
+
+
+async def run_web_pipeline(url: str) -> dict[str, Any]:
+    s = get_settings()
+    key = web_key(url) if s.cache_ttl_seconds else None
+
+    if key:
+        cached, lock = await get_or_acquire(key)
+        if cached is not None:
+            logger.info("cache_hit", key=key)
+            return cached
+    else:
+        lock = None
+
+    try:
+        result = await _run_web_pipeline_inner(url)
         if key and lock:
             _set(key, result, s.cache_ttl_seconds)
         return result

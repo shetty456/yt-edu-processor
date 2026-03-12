@@ -10,8 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.schemas import ProcessRequest, ProcessResponse, ProcessPDFResponse, FormatQuestionsRequest, FormatQuestionsResponse
-from app.services.pipeline import run_pipeline, run_pdf_pipeline
+from app.schemas import (ProcessRequest, ProcessResponse, ProcessPDFResponse,
+                         ProcessURLRequest, ProcessURLResponse,
+                         FormatQuestionsRequest, FormatQuestionsResponse)
+from app.services.pipeline import run_pipeline, run_pdf_pipeline, run_web_pipeline
 from app.services.pdf_service import validate_pdf
 from app.services.format_service import format_questions as _format_questions
 from app.utils import get_semaphore, logger
@@ -162,6 +164,40 @@ async def process_pdf(file: UploadFile = File(...)) -> JSONResponse:
             raise HTTPException(status_code=500, detail="Internal error. Please try again.")
 
         log.info("pdf_processing_completed", title=payload.get("title"))
+        return JSONResponse(content=payload)
+
+
+# -----------------------------
+# Web URL Processing Endpoint
+# -----------------------------
+@app.post("/process-url", response_model=ProcessURLResponse)
+async def process_url(body: ProcessURLRequest) -> JSONResponse:
+    sem = get_semaphore()
+    log = logger.bind(url=body.url)
+
+    if sem.locked():
+        raise HTTPException(status_code=429, detail="Server busy — retry in 30 seconds.")
+
+    async with sem:
+        log.info("url_processing_started")
+
+        try:
+            payload = await asyncio.wait_for(
+                run_web_pipeline(body.url),
+                timeout=settings.request_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail="Processing timed out. Try a shorter article.",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except Exception as exc:
+            log.error("url_unexpected_error", error=str(exc))
+            raise HTTPException(status_code=500, detail="Internal error. Please try again.")
+
+        log.info("url_processing_completed", title=payload.get("title"), eval_passed=payload.get("eval_passed"))
         return JSONResponse(content=payload)
 
 

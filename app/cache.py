@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import re
 import time
+import urllib.parse
 from typing import Any
 
 _store: dict[str, tuple[Any, float]] = {}  # key → (value, expires_at)
@@ -54,3 +55,22 @@ def pdf_key(data: bytes) -> str:
 def yt_key(url: str) -> str | None:
     m = re.search(r"(?:v=|youtu\.be/|/embed/|/shorts/|/v/)([A-Za-z0-9_-]{11})", url)
     return ("yt:" + m.group(1)) if m else None
+
+
+_TRACKING_PARAMS = frozenset({"utm_source", "utm_medium", "utm_campaign", "utm_term",
+                               "utm_content", "fbclid", "gclid", "ref", "source", "via"})
+
+
+def web_key(url: str) -> str:
+    """Normalize URL and return a cache key prefixed with 'web:'."""
+    parsed = urllib.parse.urlparse(url)
+    # lowercase scheme + host, strip trailing slash from path
+    scheme = parsed.scheme.lower()
+    host = parsed.netloc.lower()
+    path = parsed.path.rstrip("/") or "/"
+    # strip tracking params from query string
+    qs_pairs = [(k, v) for k, v in urllib.parse.parse_qsl(parsed.query)
+                if k.lower() not in _TRACKING_PARAMS]
+    query = urllib.parse.urlencode(sorted(qs_pairs))
+    normalized = urllib.parse.urlunparse((scheme, host, path, "", query, ""))
+    return "web:" + hashlib.sha256(normalized.encode()).hexdigest()

@@ -385,5 +385,23 @@ async def generate_quiz(content: str, language: str = "English") -> list[MCQItem
         items2 = _validate(raw2).quiz
         return [_shuffle_answer(i) for i in items2]
     except (json.JSONDecodeError, ValidationError, KeyError) as e:
+        # Non-English: HOTS + Indic scripts is harder; accept ≥8 well-formed questions
+        # rather than returning 500 to the user.
+        if language != "English":
+            try:
+                raw_parsed = json.loads(_strip(raw2))
+                raw_list = raw_parsed.get("quiz", raw_parsed) if isinstance(raw_parsed, dict) else raw_parsed
+                valid = []
+                for q in raw_list:
+                    if isinstance(q, dict):
+                        try:
+                            valid.append(MCQItem(**q))
+                        except Exception:
+                            pass
+                if len(valid) >= 8:
+                    log.warning("quiz_non_english_partial", count=len(valid), language=language)
+                    return [_shuffle_answer(i) for i in valid]
+            except Exception:
+                pass
         log.error("quiz_both_failed", error=str(e))
         raise ValueError(f"Quiz generation failed after 2 attempts: {e}") from e

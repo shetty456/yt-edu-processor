@@ -52,3 +52,4 @@ youtube-transcript-api==1.2.4
 cloudinary==1.42.1
 pypdf==5.1.0
 langdetect==1.0.9
+trafilatura==1.12.2

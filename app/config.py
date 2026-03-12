@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     webshare_proxy_username: str | None = None
     webshare_proxy_password: str | None = None
 
+    # Web URL pipeline
+    web_min_word_count: int = 200        # reject pages below this
+    web_fetch_timeout_seconds: int = 20  # httpx timeout
+    web_quiz_word_limit: int = 8000      # matches YouTube word cap
+
     # Response cache
     cache_ttl_seconds: int = 86400  # 24 hours; set 0 to disable
     cache_max_size: int = 500       # max cached responses (each ~5–20 KB)

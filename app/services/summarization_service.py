@@ -157,6 +157,8 @@ def merge_summaries(summaries: List[ChunkSummary]) -> MergedSummary:
 
 # ── 4. Notes generation ──────────────────────────────────────────────────────
 
+_NOTES_MAX = {"core_concepts": 15, "important_examples": 10, "key_points": 20, "definitions": 10}
+
 _NOTES_SYS = """\
 You are a thoughtful writer and educator. Your job is to turn a structured concept summary
 into a clear, engaging blog-style article that a curious reader can enjoy and learn from.
@@ -202,7 +204,8 @@ should make the reader feel they got more than they expected.)
 @_retry()
 async def generate_notes(merged: MergedSummary, title: str, language: str = "English") -> str:
     logger.info("notes_start")
-    summary_text = json.dumps(merged.model_dump(), indent=2)
+    trimmed = {k: (v[:_NOTES_MAX[k]] if k in _NOTES_MAX else v) for k, v in merged.model_dump().items()}
+    summary_text = json.dumps(trimmed, indent=2)
 
     sys_prompt = _NOTES_SYS
     if language != "English":

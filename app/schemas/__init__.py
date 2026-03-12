@@ -70,6 +70,26 @@ class ProcessPDFResponse(BaseModel):
     eval_passed: bool
 
 
+class ProcessURLRequest(BaseModel):
+    url: str
+
+    @field_validator("url")
+    @classmethod
+    def must_be_web_url(cls, v: str) -> str:
+        v = v.strip()
+        if not v.lower().startswith(("http://", "https://")):
+            raise ValueError("Only HTTP and HTTPS URLs are supported.")
+        return v
+
+
+class ProcessURLResponse(BaseModel):
+    source_url: str
+    title: str
+    summary_markdown: str
+    quiz: list[dict[str, Any]]
+    eval_passed: bool
+
+
 class FormatQuestionsRequest(BaseModel):
     text: str = Field(..., min_length=10, description="Raw pasted quiz content")
 
