@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     # Sarvam-m
     sarvam_api_key: str
     sarvam_base_url: str = "https://api.sarvam.ai/v1"
-    sarvam_model: str = "sarvam-30b"
+    sarvam_model: str = "sarvam-m"
 
     # Cloudinary
     cloudinary_cloud_name: str
