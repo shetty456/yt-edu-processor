@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     # Sarvam-m
     sarvam_api_key: str
     sarvam_base_url: str = "https://api.sarvam.ai/v1"
-    sarvam_model: str = "sarvam-m"
+    sarvam_model: str = "sarvam-30b"
 
     # Cloudinary
     cloudinary_cloud_name: str
@@ -40,7 +40,9 @@ class Settings(BaseSettings):
     # Web URL pipeline
     web_min_word_count: int = 200        # reject pages below this
     web_fetch_timeout_seconds: int = 20  # httpx timeout
-    web_quiz_word_limit: int = 8000      # matches YouTube word cap
+    web_quiz_word_limit: int = 2000      # max safe words for quiz prompt at ~1.88 tokens/word
+    web_chunk_word_limit: int = 3500     # trigger chunking above this word count
+    web_chunk_target_words: int = 3000   # target words per chunk (~5800 tokens, under 7168 limit)
 
     # Response cache
     cache_ttl_seconds: int = 86400  # 24 hours; set 0 to disable

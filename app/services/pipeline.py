@@ -190,7 +190,12 @@ async def _run_web_pipeline_inner(url: str) -> dict[str, Any]:
     quiz_content = " ".join(words[:s.web_quiz_word_limit]) if len(words) > s.web_quiz_word_limit else text
 
     (_, notes_markdown), quiz_items = await asyncio.gather(
-        run_summarisation(text, title, language=detected_language),
+        run_summarisation(
+            text, title,
+            chunk_word_limit=s.web_chunk_word_limit,
+            chunk_target_words=s.web_chunk_target_words,
+            language=detected_language,
+        ),
         generate_quiz(content=quiz_content, language=detected_language),
     )
     log.info("web_parallel_done", quiz_questions=len(quiz_items))
