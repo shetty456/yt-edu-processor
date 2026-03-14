@@ -118,7 +118,7 @@ async def summarise_chunk(chunk: str, idx: int, language: str = "English") -> Ch
     resp = await _client.chat.completions.create(
         model=settings.sarvam_model,
         temperature=0.4,
-        max_tokens=2048,
+        max_tokens=4096,
         messages=[
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": _CHUNK_USR.format(chunk=chunk, words=len(chunk.split()))},

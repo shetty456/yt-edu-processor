@@ -230,11 +230,17 @@ _REPAIR_SYS = """\
 Your previous response either failed JSON schema validation or contained low-quality
 recall questions. Fix both issues and output corrected JSON.
 Output ONLY the raw JSON — no markdown, no explanation.
-The schema requires: top-level key "quiz", array of 10 to 15 objects,
-each with: question (str), options (A/B/C/D), answer (A|B|C|D), description (≥20 chars).
-All questions must be distinct. All 4 options per question must be distinct.
+The schema requires a top-level "quiz" key containing an array of 10 to 15 objects.
+Each object must have EXACTLY this structure:
+{
+  "question": "...",
+  "options": {"A": "...", "B": "...", "C": "...", "D": "..."},
+  "answer": "A",
+  "description": "Correct because ... [minimum 2 sentences]"
+}
+Rules: all questions distinct, all 4 options per question distinct, answer is one of A/B/C/D.
 Do NOT reference "the video", "the transcript", or "the speaker" in any question.
-Replace every rejected recall question with one using a Why / What-would-happen /
+Replace every rejected recall question with a Why / What-would-happen /
 What-distinguishes stem that requires reasoning about a relationship between two concepts.
 """
 
@@ -272,7 +278,7 @@ async def _call(system: str, user: str) -> str:
     resp = await _client.chat.completions.create(
         model=settings.sarvam_model,
         temperature=0.35,
-        max_tokens=4096,
+        max_tokens=8192,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
     )
     content = (resp.choices[0].message.content or "").strip()
@@ -371,8 +377,12 @@ async def generate_quiz(content: str, language: str = "English") -> list[MCQItem
                   "relationship between two concepts.\n"
             )
 
+    # Truncate raw1 to ~3200 chars (~800 tokens) so the repair prompt's input
+    # doesn't balloon and leave insufficient room for the model's response.
+    _MAX_RAW1_CHARS = 3200
+    raw1_excerpt = raw1 if len(raw1) <= _MAX_RAW1_CHARS else raw1[:_MAX_RAW1_CHARS] + "\n... [truncated]"
     repair_user = (
-        f"Your previous response:\n\n{raw1}\n\n"
+        f"Your previous response:\n\n{raw1_excerpt}\n\n"
         f"Failed validation or contained too many recall questions. "
         f"Fix and output corrected JSON with 10 to 15 questions."
         f"{rejected_lines}"
@@ -398,7 +408,7 @@ async def generate_quiz(content: str, language: str = "English") -> list[MCQItem
                             valid.append(MCQItem(**q))
                         except Exception:
                             pass
-                if len(valid) >= 8:
+                if len(valid) >= 10:
                     log.warning("quiz_non_english_partial", count=len(valid), language=language)
                     return [_shuffle_answer(i) for i in valid]
             except Exception:

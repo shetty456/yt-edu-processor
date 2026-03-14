@@ -189,15 +189,24 @@ async def _run_web_pipeline_inner(url: str) -> dict[str, Any]:
     words = text.split()
     quiz_content = " ".join(words[:s.web_quiz_word_limit]) if len(words) > s.web_quiz_word_limit else text
 
-    (_, notes_markdown), quiz_items = await asyncio.gather(
-        run_summarisation(
-            text, title,
-            chunk_word_limit=s.web_chunk_word_limit,
-            chunk_target_words=s.web_chunk_target_words,
-            language=detected_language,
-        ),
-        generate_quiz(content=quiz_content, language=detected_language),
-    )
+    try:
+        (_, notes_markdown), quiz_items = await asyncio.gather(
+            run_summarisation(
+                text, title,
+                chunk_word_limit=s.web_chunk_word_limit,
+                chunk_target_words=s.web_chunk_target_words,
+                language=detected_language,
+            ),
+            generate_quiz(content=quiz_content, language=detected_language),
+        )
+    except ValueError:
+        raise
+    except Exception as exc:
+        log.error("web_pipeline_processing_error", error=str(exc), type=type(exc).__name__)
+        raise ValueError(
+            "Failed to process this page. The content may be too short, "
+            "too generic, or the AI service may be temporarily unavailable."
+        ) from exc
     log.info("web_parallel_done", quiz_questions=len(quiz_items))
 
     # Step 4: Eval (graceful — never crashes the pipeline)

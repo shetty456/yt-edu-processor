@@ -161,17 +161,45 @@ async def _validate_url(url: str) -> None:
 
 def _extract_text(html: str, url: str) -> tuple[str, str]:
     """Run trafilatura synchronously; returns (title, text)."""
-    text = trafilatura.extract(
-        html,
-        url=url,
-        include_tables=False,
-        include_comments=False,
-        favor_precision=True,
-        deduplicate=True,
-    )
-    meta = trafilatura.extract_metadata(html, default_url=url)
-    title = (meta.title if meta and meta.title else None) or _title_from_tag(html) or "Untitled"
+    try:
+        text = trafilatura.extract(
+            html, url=url,
+            include_tables=False, include_comments=False,
+            favor_precision=True, deduplicate=True,
+        )
+        # Precision mode can over-filter short/simple pages — retry without it
+        if not text:
+            text = trafilatura.extract(
+                html, url=url,
+                include_tables=False, include_comments=False,
+                favor_precision=False, deduplicate=True,
+            )
+    except Exception as exc:
+        logger.warning("trafilatura_extract_failed", error=str(exc))
+        text = None
+
+    try:
+        meta = trafilatura.extract_metadata(html, default_url=url)
+        title = (meta.title if meta and meta.title else None) or _title_from_tag(html) or "Untitled"
+    except Exception as exc:
+        logger.warning("trafilatura_metadata_failed", error=str(exc))
+        title = _title_from_tag(html) or "Untitled"
+
     return title, text or ""
+
+
+async def _fetch_html_playwright(url: str, timeout_ms: int = 30_000) -> str:
+    """Render the page in a headless Chromium browser and return the HTML.
+    Used as a fallback when httpx returns content that trafilatura cannot extract."""
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.goto(url, timeout=timeout_ms, wait_until="networkidle")
+            return await page.content()
+        finally:
+            await browser.close()
 
 
 async def _fetch_html(url: str, timeout: int) -> tuple[str, str]:
@@ -259,6 +287,15 @@ async def fetch_and_extract(url: str) -> tuple[str, str]:
 
     # Extract text in thread (trafilatura is CPU-bound)
     title, text = await asyncio.to_thread(_extract_text, html, final_url)
+
+    # Playwright fallback: if httpx+trafilatura yielded nothing, try a headless render
+    if not text.strip():
+        log.info("web_playwright_fallback")
+        try:
+            rendered_html = await _fetch_html_playwright(url)
+            title, text = await asyncio.to_thread(_extract_text, rendered_html, final_url)
+        except Exception as exc:
+            log.warning("web_playwright_fallback_failed", error=str(exc))
 
     if not text.strip():
         raise ValueError(
