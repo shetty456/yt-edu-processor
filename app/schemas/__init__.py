@@ -112,6 +112,7 @@ class ChunkSummary(BaseModel):
     important_examples: list[str] = Field(default_factory=list)
     key_points: list[str] = Field(default_factory=list)
     definitions: list[str] = Field(default_factory=list)
+    key_statistics: list[str] = Field(default_factory=list)
 
 
 class MergedSummary(BaseModel):
@@ -119,6 +120,7 @@ class MergedSummary(BaseModel):
     important_examples: list[str]
     key_points: list[str]
     definitions: list[str]
+    key_statistics: list[str] = Field(default_factory=list)
 
 
 # ── Eval model ────────────────────────────────────────────────────────────────

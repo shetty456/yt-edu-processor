@@ -226,6 +226,48 @@ Output ONLY this JSON:
 ]
 """
 
+_FACTUAL_QUIZ_SYS = """\
+You are a quiz writer for factual, data-driven content (reports, timelines, statistics).
+Write 10-15 MCQs that test precise recall and basic interpretation of dates, figures,
+and facts from the source material.
+
+RULES:
+1. Questions must be directly answerable from the source data — no inference beyond the text.
+2. Each question tests ONE specific fact: a number, date, percentage, ranking, or named entity.
+3. The correct answer must appear verbatim (or near-verbatim) in the source.
+4. Distractors must be plausible: adjacent years, similar percentages, related entities —
+   NOT obviously wrong values. A student who remembers the approximate figure but not
+   the exact value should find distractors challenging.
+5. Allowed question stems:
+   - "What was [X] in [year/period]?"
+   - "Which figure represents [X] as of [date]?"
+   - "In which year did [event/milestone] occur?"
+   - "By what percentage did [X] change between [Y1] and [Y2]?"
+   - "Which country/entity ranked [position] in [metric] during [period]?"
+6. NEVER reference "the document", "the report", "the text", or "the source".
+   Ask as if testing general knowledge of the domain.
+7. Output ONLY raw JSON — no markdown fences.
+"""
+
+_FACTUAL_QUIZ_USR = """\
+Source material:
+{content}
+
+Write 10-15 MCQs testing exact recall of dates, figures, and facts.
+
+Output ONLY this JSON:
+{{
+  "quiz": [
+    {{
+      "question": "...",
+      "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
+      "answer": "A",
+      "description": "Correct because [state the exact figure/date from source and why the distractors are wrong]."
+    }}
+  ]
+}}
+"""
+
 _REPAIR_SYS = """\
 Your previous response either failed JSON schema validation or contained low-quality
 recall questions. Fix both issues and output corrected JSON.
@@ -288,6 +330,21 @@ async def _call(system: str, user: str) -> str:
     return raw
 
 
+@_api_retry()
+async def _call_factual(system: str, user: str) -> str:
+    resp = await _client.chat.completions.create(
+        model=settings.sarvam_model,
+        temperature=0.2,
+        max_tokens=8192,
+        messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+    )
+    content = (resp.choices[0].message.content or "").strip()
+    raw = strip_think(content)
+    if not raw:
+        raw = content
+    return raw
+
+
 def _validate(raw: str) -> QuizPayload:
     if not raw:
         raise ValueError("Empty response from model")
@@ -310,8 +367,57 @@ async def _extract_concepts(content: str, language: str = "English") -> str:
         return ""  # fall through gracefully; question prompt still has transcript
 
 
-async def generate_quiz(content: str, language: str = "English") -> list[MCQItem]:
+async def generate_quiz(
+    content: str, language: str = "English", is_factual: bool = False
+) -> list[MCQItem]:
     log = logger.bind(step="quiz")
+
+    # ── Factual path: skip concept extraction; use precision recall prompts ───
+    if is_factual:
+        log.info("quiz_factual_path")
+        factual_sys = _FACTUAL_QUIZ_SYS
+        if language != "English":
+            factual_sys += f"\nWrite all questions, answer options, and descriptions in {language}."
+        raw1 = await _call_factual(factual_sys, _FACTUAL_QUIZ_USR.format(content=content))
+        try:
+            items = _validate(raw1).quiz
+            return [_shuffle_answer(i) for i in items]
+        except (json.JSONDecodeError, ValidationError, KeyError) as e:
+            log.warning("quiz_factual_attempt_1_failed", error=str(e))
+            # Repair attempt
+            _MAX_RAW1_CHARS = 3200
+            raw1_excerpt = raw1 if len(raw1) <= _MAX_RAW1_CHARS else raw1[:_MAX_RAW1_CHARS] + "\n... [truncated]"
+            repair_user = (
+                f"Your previous response:\n\n{raw1_excerpt}\n\n"
+                f"Failed validation. Fix and output corrected JSON with 10 to 15 questions."
+            )
+            repair_sys = _REPAIR_SYS
+            if language != "English":
+                repair_sys += f"\nWrite all questions, answer options, and descriptions in {language}."
+            raw2 = await _call_factual(repair_sys, repair_user)
+            try:
+                items2 = _validate(raw2).quiz
+                return [_shuffle_answer(i) for i in items2]
+            except (json.JSONDecodeError, ValidationError, KeyError) as e2:
+                # Non-English factual: same lenient fallback as the HOTS path
+                if language != "English":
+                    try:
+                        raw_parsed = json.loads(_strip(raw2))
+                        raw_list = raw_parsed.get("quiz", raw_parsed) if isinstance(raw_parsed, dict) else raw_parsed
+                        valid = []
+                        for q in raw_list:
+                            if isinstance(q, dict):
+                                try:
+                                    valid.append(MCQItem(**q))
+                                except Exception:
+                                    pass
+                        if len(valid) >= 10:
+                            log.warning("quiz_factual_non_english_partial", count=len(valid), language=language)
+                            return [_shuffle_answer(i) for i in valid]
+                    except Exception:
+                        pass
+                log.error("quiz_factual_both_failed", error=str(e2))
+                raise ValueError(f"Factual quiz generation failed after 2 attempts: {e2}") from e2
 
     # ── Pass 1: chain-of-thought concept extraction ──────────────────────────
     log.info("quiz_concept_extract")

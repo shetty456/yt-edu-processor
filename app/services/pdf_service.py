@@ -142,6 +142,23 @@ async def upload_pdf_to_cloudinary(pdf_bytes: bytes, filename: str) -> str:
         return ""  # pipeline continues; pdf_url will be empty in response
 
 
+def detect_factual_content(text: str) -> bool:
+    """Returns True if text is dominated by dates, numbers, and statistics."""
+    words = text.split()
+    if not words:
+        return False
+    numeric_pattern = re.compile(
+        r'\b(\d{1,3}(?:,\d{3})*(?:\.\d+)?%?'     # numbers, percentages
+        r'|\d{4}'                                   # years
+        r'|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{1,2}'  # month dates
+        r'|Q[1-4]\s*\d{4})\b',                     # quarters
+        re.IGNORECASE
+    )
+    matches = numeric_pattern.findall(text[:3000])  # check first 3000 chars
+    density = len(matches) / max(len(words[:500]), 1)
+    return density > 0.06  # >6% of tokens are numeric/date = factual
+
+
 async def infer_pdf_title(
     text: str,
     fallback: str = "Untitled Document",

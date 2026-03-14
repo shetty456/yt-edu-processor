@@ -88,6 +88,15 @@ RULES:
 3. Output ONLY the raw JSON object — no markdown fences, no commentary.
 """
 
+_CHUNK_SYS_FACTUAL_EXTRA = """\
+
+NUMERICAL PRECISION RULES (this is a fact-heavy document):
+- Capture ALL specific numbers, dates, percentages, and measurements in key_statistics.
+- Never approximate, round, or paraphrase any numerical value.
+- Format: "[Date/Year]: [Exact figure] — [1-sentence context]"
+- key_statistics target: 5-15 entries per chunk.
+"""
+
 _CHUNK_USR = """\
 Analyse this transcript chunk ({words} words) and return ONLY this JSON:
 
@@ -95,10 +104,11 @@ Analyse this transcript chunk ({words} words) and return ONLY this JSON:
   "core_concepts":       ["Concept: 1-2 sentence explanation"],
   "important_examples":  ["Concrete example or analogy from the text"],
   "key_points":          ["Specific, memorable insight from this chunk"],
-  "definitions":         ["Term: its definition as given in the transcript"]
+  "definitions":         ["Term: its definition as given in the transcript"],
+  "key_statistics":      ["[Date/Year]: [Exact figure with units] — brief context"]
 }}
 
-Targets: core_concepts 3-7, important_examples 0-5, key_points 4-10, definitions 0-8.
+Targets: core_concepts 3-7, important_examples 0-5, key_points 4-10, definitions 0-8, key_statistics 0-15.
 Empty list is fine if the category has no material in this chunk.
 
 CHUNK:
@@ -109,15 +119,20 @@ CHUNK:
 
 
 @_retry()
-async def summarise_chunk(chunk: str, idx: int, language: str = "English") -> ChunkSummary:
+async def summarise_chunk(
+    chunk: str, idx: int, language: str = "English", is_factual: bool = False
+) -> ChunkSummary:
     log = logger.bind(chunk=idx, words=len(chunk.split()))
     log.info("chunk_start")
     sys_prompt = _CHUNK_SYS
+    if is_factual:
+        sys_prompt += _CHUNK_SYS_FACTUAL_EXTRA
     if language != "English":
         sys_prompt += f"\nExtract and write all content in {language}."
+    temperature = 0.2 if is_factual else 0.4
     resp = await _client.chat.completions.create(
         model=settings.sarvam_model,
-        temperature=0.4,
+        temperature=temperature,
         max_tokens=4096,
         messages=[
             {"role": "system", "content": sys_prompt},
@@ -152,12 +167,13 @@ def merge_summaries(summaries: List[ChunkSummary]) -> MergedSummary:
         important_examples=dedup([e for s in summaries for e in s.important_examples]),
         key_points=dedup([p for s in summaries for p in s.key_points]),
         definitions=dedup([d for s in summaries for d in s.definitions]),
+        key_statistics=[stat for s in summaries for stat in s.key_statistics],
     )
 
 
 # ── 4. Notes generation ──────────────────────────────────────────────────────
 
-_NOTES_MAX = {"core_concepts": 15, "important_examples": 10, "key_points": 20, "definitions": 10}
+_NOTES_MAX = {"core_concepts": 15, "important_examples": 10, "key_points": 20, "definitions": 10, "key_statistics": 30}
 
 _NOTES_SYS = """\
 You are a thoughtful writer and educator. Your job is to turn a structured concept summary
@@ -177,7 +193,7 @@ Write a blog-style article titled "{title}".
 Source material (structured concept extraction):
 {summary}
 
-Use EXACTLY these four H2 headings — write naturally under each:
+Use EXACTLY these H2 headings — write naturally under each:
 
 ## Overview
 (What is this topic about and why does it matter? Write 3-5 substantive paragraphs.
@@ -200,27 +216,45 @@ historical background, or an illustrative story. 2-4 paragraphs. This section
 should make the reader feel they got more than they expected.)
 """
 
+_NOTES_USR_FACTUAL_EXTRA = """\
+
+## Key Data
+(Present all significant statistics, figures, and dates as a structured list.
+Each entry: [Date/Period] — [Exact value with units] — [1-sentence significance].
+Do NOT round or paraphrase any number. Preserve units exactly.)
+"""
+
 
 @_retry()
-async def generate_notes(merged: MergedSummary, title: str, language: str = "English") -> str:
+async def generate_notes(
+    merged: MergedSummary, title: str, language: str = "English", is_factual: bool = False
+) -> str:
     logger.info("notes_start")
     trimmed = {k: (v[:_NOTES_MAX[k]] if k in _NOTES_MAX else v) for k, v in merged.model_dump().items()}
     summary_text = json.dumps(trimmed, indent=2)
 
+    notes_usr = _NOTES_USR
+    if is_factual:
+        notes_usr = notes_usr + _NOTES_USR_FACTUAL_EXTRA
+
     sys_prompt = _NOTES_SYS
     if language != "English":
+        heading_list = "## Overview, ## Key Ideas, ## In Practice, ## Worth Knowing"
+        if is_factual:
+            heading_list += ", ## Key Data"
         sys_prompt += (
             f"\nRespond entirely in {language}. Write all prose, sub-headings, and explanations in {language}. "
-            f"The four H2 section headings (## Overview, ## Key Ideas, ## In Practice, ## Worth Knowing) "
+            f"The H2 section headings ({heading_list}) "
             f"must remain in English exactly as written."
         )
+    temperature = 0.2 if is_factual else 0.4
     resp = await _client.chat.completions.create(
         model=settings.sarvam_model,
-        temperature=0.4,
+        temperature=temperature,
         max_tokens=4096,
         messages=[
             {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": _NOTES_USR.format(title=title, summary=summary_text)},
+            {"role": "user", "content": notes_usr.format(title=title, summary=summary_text)},
         ],
     )
 
@@ -243,11 +277,12 @@ async def run_summarisation(
     chunk_word_limit: int | None = None,
     chunk_target_words: int | None = None,
     language: str = "English",
+    is_factual: bool = False,
 ) -> Tuple[MergedSummary, str]:
     chunks = chunk_transcript(transcript, chunk_word_limit, chunk_target_words)
     summaries = await asyncio.gather(
-        *[summarise_chunk(c, i, language=language) for i, c in enumerate(chunks)]
+        *[summarise_chunk(c, i, language=language, is_factual=is_factual) for i, c in enumerate(chunks)]
     )
     merged = merge_summaries(list(summaries))
-    notes = await generate_notes(merged, title, language=language)
+    notes = await generate_notes(merged, title, language=language, is_factual=is_factual)
     return merged, notes
