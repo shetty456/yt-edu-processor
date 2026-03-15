@@ -420,8 +420,10 @@ async def generate_quiz(
                 raise ValueError(f"Factual quiz generation failed after 2 attempts: {e2}") from e2
 
     # ── Pass 1: chain-of-thought concept extraction ──────────────────────────
-    log.info("quiz_concept_extract")
-    concept_json = await _extract_concepts(content, language=language)
+    concept_json = ""
+    if language == "English":
+        log.info("quiz_concept_extract")
+        concept_json = await _extract_concepts(content, language=language)
     if concept_json:
         concept_section = (
             "\nPre-extracted concept-pairs (use these as seed material for your "
