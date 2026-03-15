@@ -12,6 +12,19 @@ from app.utils import logger
 from app.cache import get_or_acquire, _set, _locks, yt_key, pdf_key, web_key
 from app.config import get_settings
 
+_GENERIC_STEMS = frozenset({
+    "document", "doc", "file", "pdf", "untitled", "scan", "scanned",
+    "image", "img", "page", "upload", "download", "attachment",
+})
+
+
+def _is_descriptive_filename(stem: str) -> bool:
+    """Return True if the filename stem looks like a real title."""
+    words = stem.replace("-", " ").replace("_", " ").split()
+    if len(words) < 3:
+        return False
+    return not all(w.lower() in _GENERIC_STEMS for w in words)
+
 # imported lazily inside run_pdf_pipeline to avoid circular imports at module load
 
 
@@ -84,7 +97,7 @@ async def run_pipeline(url: str) -> dict[str, Any]:
 
 
 async def _run_pdf_pipeline_inner(pdf_bytes: bytes, filename: str) -> dict[str, Any]:
-    from app.services.pdf_service import upload_pdf_to_cloudinary, extract_pdf_text, infer_pdf_title, detect_language, detect_factual_content
+    from app.services.pdf_service import upload_pdf_to_cloudinary, extract_pdf_text, infer_pdf_title, detect_language, detect_factual_content, detect_question_bank
 
     log = logger.bind(filename=filename)
     log.info("pdf_pipeline_start")
@@ -97,16 +110,28 @@ async def _run_pdf_pipeline_inner(pdf_bytes: bytes, filename: str) -> dict[str, 
     if not text.strip():
         raise ValueError("Could not extract readable text from PDF.")
 
-    # Step 1b: Detect language + factual content type
+    # Step 1b: Reject question-bank PDFs — pipeline can't produce useful output from them
+    if detect_question_bank(text):
+        raise ValueError(
+            "This PDF appears to be a question bank or exam paper. "
+            "Please upload study material such as textbook chapters or notes instead."
+        )
+
+    # Step 1d: Detect language + factual content type
     detected_language = await asyncio.to_thread(detect_language, text)
     is_factual = detect_factual_content(text)
     log.info("pdf_language_detected", language=detected_language)
     log.info("pdf_content_type", is_factual=is_factual)
 
     # Step 2: Infer title (falls back to filename stem on API error)
-    fallback_title = filename.rsplit(".", 1)[0].replace("-", " ").replace("_", " ").title()
-    title = await infer_pdf_title(text, fallback=fallback_title, language=detected_language)
-    log.info("pdf_title_inferred", title=title)
+    stem = filename.rsplit(".", 1)[0]
+    fallback_title = stem.replace("-", " ").replace("_", " ").title()
+    if _is_descriptive_filename(stem):
+        title = fallback_title
+        log.info("pdf_title_from_filename", title=title)
+    else:
+        title = await infer_pdf_title(text, fallback=fallback_title, language=detected_language)
+        log.info("pdf_title_inferred", title=title)
 
     # Step 3: Summarise + Quiz in parallel
     s = get_settings()
