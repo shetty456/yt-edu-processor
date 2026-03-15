@@ -54,3 +54,6 @@ pypdf==5.1.0
 langdetect==1.0.9
 trafilatura==1.12.2
 playwright
+pdf2image==1.17.0
+pytesseract==0.3.13
+Pillow==11.2.1
