@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     web_chunk_word_limit: int = 2500     # trigger chunking above this word count
     web_chunk_target_words: int = 2000   # target words per chunk (~3800 tokens input, leaves 4096 for response)
 
+    # OCR
+    ocr_enabled: bool = True
+
     # Response cache
     cache_ttl_seconds: int = 86400  # 24 hours; set 0 to disable
     cache_max_size: int = 500       # max cached responses (each ~5–20 KB)

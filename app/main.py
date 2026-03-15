@@ -217,7 +217,7 @@ async def format_questions_endpoint(body: FormatQuestionsRequest) -> JSONRespons
         try:
             formatted_text = await asyncio.wait_for(
                 _format_questions(body.text),
-                timeout=60,
+                timeout=settings.request_timeout_seconds,
             )
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504, detail="Formatting timed out.")
