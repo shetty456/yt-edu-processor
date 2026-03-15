@@ -203,7 +203,12 @@ async def extract_video(youtube_url: str) -> VideoMeta:
     )
 
     # 5. Validate duration
-    if duration > 0 and duration > settings.max_video_duration_seconds:
+    if duration <= 0:
+        # Transcript-based estimate: ~130 words per minute
+        word_count_raw = len(raw.split())
+        duration = max(1, (word_count_raw * 60) // 130)
+        log.info("yt_duration_estimated", estimated_s=duration)
+    if duration > settings.max_video_duration_seconds:
         raise ValueError(
             f"Video is {duration / 3600:.1f} h long. Max supported is 2 hours."
         )
