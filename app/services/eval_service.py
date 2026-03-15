@@ -76,7 +76,7 @@ no markdown fences, no explanation. Just the raw JSON.
 _USER = """\
 Evaluate the AI-generated educational content below against the transcript excerpt.
 
-=== TRANSCRIPT EXCERPT (ground truth, first 2000 words) ===
+=== TRANSCRIPT EXCERPT (ground truth, first 500 words) ===
 {excerpt}
 
 === SUMMARY (blog-style article) ===
@@ -130,14 +130,14 @@ async def evaluate_output(
     log = logger.bind(step="eval")
     log.info("eval_start", model=settings.sarvam_model)
 
-    excerpt   = " ".join(transcript.split()[:2000])
+    excerpt   = " ".join(transcript.split()[:500])
     quiz_text = _format_quiz(quiz)
 
     try:
         resp = await _client.chat.completions.create(
             model=settings.sarvam_model,
             temperature=0.1,
-            max_tokens=2048,
+            max_tokens=512,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": _SYSTEM},
