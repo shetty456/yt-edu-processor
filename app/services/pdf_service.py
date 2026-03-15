@@ -96,10 +96,60 @@ def _validate_and_count_pages(pdf_bytes: bytes) -> int:
     return pages
 
 
+_OCR_FALLBACK_THRESHOLD = 50  # chars; below this we assume scanned
+
+
 def _extract_text_sync(pdf_bytes: bytes) -> str:
+    s = get_settings()
     reader = PdfReader(io.BytesIO(pdf_bytes))
     parts = [page.extract_text() or "" for page in reader.pages]
-    return "\n\n".join(parts)
+    text = "\n\n".join(parts)
+
+    if s.ocr_enabled and len(text.strip()) < _OCR_FALLBACK_THRESHOLD:
+        logger.info("ocr_fallback_triggered", extracted_chars=len(text.strip()))
+        text = _extract_text_with_ocr_sync(pdf_bytes)
+
+    return text
+
+
+def _ocr_quality_ok(text: str) -> bool:
+    """Returns False if OCR output looks like garbage (< 40% alphanumeric + space chars)."""
+    if not text.strip():
+        return False
+    alnum_or_space = sum(c.isalnum() or c.isspace() for c in text)
+    return (alnum_or_space / len(text)) > 0.40
+
+
+def _extract_text_with_ocr_sync(pdf_bytes: bytes) -> str:
+    """OCR fallback for image-based/scanned PDFs.
+
+    Returns empty string if OCR libraries are not installed or all pages fail.
+    """
+    try:
+        import pytesseract
+        from pdf2image import convert_from_bytes
+    except ImportError as exc:
+        logger.warning("ocr_libraries_not_installed", error=str(exc))
+        return ""
+
+    s = get_settings()
+    try:
+        images = convert_from_bytes(pdf_bytes, dpi=200, first_page=1, last_page=s.max_pdf_pages)
+    except Exception as exc:
+        logger.warning("ocr_pdf_render_failed", error=str(exc))
+        return ""
+
+    parts = []
+    for i, image in enumerate(images):
+        try:
+            parts.append(pytesseract.image_to_string(image, lang="eng+hin"))
+        except Exception as exc:
+            logger.warning("ocr_page_failed", page=i + 1, error=str(exc))
+    result = "\n\n".join(parts)
+    if not _ocr_quality_ok(result):
+        logger.warning("ocr_quality_check_failed", chars=len(result))
+        return ""
+    return result
 
 
 def _slugify(name: str) -> str:
@@ -149,7 +199,7 @@ def detect_factual_content(text: str) -> bool:
         return False
     numeric_pattern = re.compile(
         r'\b(\d{1,3}(?:,\d{3})*(?:\.\d+)?%?'     # numbers, percentages
-        r'|\d{4}'                                   # years
+        r'|(?:1[89]\d{2}|20[0-9]{2}|21\d{2})'        # years 1800–2199
         r'|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{1,2}'  # month dates
         r'|Q[1-4]\s*\d{4})\b',                     # quarters
         re.IGNORECASE
@@ -157,6 +207,33 @@ def detect_factual_content(text: str) -> bool:
     matches = numeric_pattern.findall(text[:3000])  # check first 3000 chars
     density = len(matches) / max(len(words[:500]), 1)
     return density > 0.06  # >6% of tokens are numeric/date = factual
+
+
+def detect_question_bank(text: str) -> bool:
+    """Return True if the text looks like a question bank rather than study material.
+
+    Heuristic: checks what fraction of non-empty lines start with patterns
+    common in question papers (numbered questions, MCQ options, Q. prefixes).
+    Requires both a minimum absolute count and a high ratio to avoid false
+    positives from textbooks with a few numbered sections or examples.
+    """
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if len(lines) < 10:
+        return False
+
+    q_pattern = re.compile(
+        r'^(?:'
+        r'[1-9]\d{0,2}[\.\)]\s|'  # 1–999 followed by ". " or ") " (question numbers)
+        r'Q\.?\s*\d+[\.\):\s]|'   # Q.1. / Q1: / Q 1
+        r'[Qq]uestion\s+\d+|'     # Question 1
+        r'\([a-dA-D]\)\s'         # (a) / (b) MCQ option
+        r')'
+    )
+    q_lines = sum(1 for l in lines if q_pattern.match(l))
+    # Require at least 8 matching lines (absolute) AND >35% ratio.
+    # The higher ratio + absolute floor avoids rejecting textbooks that happen
+    # to have a handful of numbered section headers or worked examples.
+    return q_lines >= 8 and (q_lines / len(lines)) > 0.35
 
 
 async def infer_pdf_title(

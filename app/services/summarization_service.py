@@ -58,7 +58,7 @@ def chunk_transcript(
     if len(words) <= limit:
         return [text]
 
-    sentences = re.split(r"(?<=[.!?])\s+", text)
+    sentences = re.split(r"(?<=[.!?।])\s+", text)
     chunks: List[str] = []
     current: List[str] = []
     wc = 0
