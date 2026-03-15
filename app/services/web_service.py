@@ -118,10 +118,27 @@ def _check_blocked_domain(url: str) -> bool:
     return False
 
 
+_PAYWALL_PATTERNS = re.compile(
+    r"subscribe to (continue|read|access)|"
+    r"sign in to (continue|read|access)|"
+    r"create a free account|"
+    r"log in to read|"
+    r"members[- ]only|"
+    r"this content is for subscribers|"
+    r"unlock this article|"
+    r"paywall",
+    re.IGNORECASE,
+)
+
+
+def _is_paywall_html(html: str) -> bool:
+    return bool(_PAYWALL_PATTERNS.search(html[:5000]))
+
+
 def _check_explicit(text: str) -> bool:
-    """Return True if text (first 500 words) contains explicit keywords."""
+    """Return True if text (first 1000 words) contains explicit keywords."""
     words = text.split()
-    sample = " ".join(words[:500]).lower()
+    sample = " ".join(words[:1000]).lower()
     for kw in _EXPLICIT_KEYWORDS:
         if kw in sample:
             return True
@@ -290,6 +307,11 @@ async def fetch_and_extract(url: str) -> tuple[str, str]:
 
     # Playwright fallback: if httpx+trafilatura yielded nothing, try a headless render
     if not text.strip():
+        if _is_paywall_html(html):
+            raise ValueError(
+                "This page is behind a paywall or requires login. "
+                "Only publicly accessible content is supported."
+            )
         log.info("web_playwright_fallback")
         try:
             rendered_html = await _fetch_html_playwright(url)
